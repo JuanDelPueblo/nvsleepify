@@ -56,9 +56,29 @@ impl PciDevice {
             }
         }
 
-        // Fallback: This is tricky. The user mentioned "/sys/bus/pci/slots/0/power".
-        // Users might need to configure this manually if autodetection fails.
-        // Or we can try to walk up the bridge.
+        // Fallback: Iterate over all slots and match based on address
+        // This handles cases where 'slot' file is missing in device directory
+        let pci_slots = Path::new("/sys/bus/pci/slots");
+        if pci_slots.exists() {
+            if let Ok(entries) = fs::read_dir(pci_slots) {
+                for entry in entries.flatten() {
+                    let address_file = entry.path().join("address");
+                    if let Ok(addr_content) = fs::read_to_string(address_file) {
+                        let addr_content = addr_content.trim();
+                        // self.address is normally "0000:01:00.0"
+                        // addr_content in slot is usually "0000:01:00" (bus address)
+                        // Verify if device address starts with the slot address
+                        if !addr_content.is_empty()
+                            && (self.address == addr_content
+                                || self.address.starts_with(addr_content))
+                        {
+                            return Some(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+
         None
     }
 
