@@ -34,7 +34,7 @@ You can build and install `nvsleepify` using the provided Makefile.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/nvsleepify.git
+git clone https://github.com/JuanDelPueblo/nvsleepify.git
 cd nvsleepify
 
 # Build and Install (installs to /usr/local/bin by default)
