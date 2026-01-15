@@ -8,7 +8,7 @@ pub fn get_processes_using_nvidia(extra_paths: &[String]) -> Result<Vec<(String,
     // We will use sh to run lsof with glob pattern for /dev/nvidia*
     // And append specific DRI paths provided by caller
 
-    let mut paths_to_check = vec!["/dev/nvidia*".to_string()];
+    let mut paths_to_check = vec!["/dev/nvidia[0-9]*".to_string()];
     paths_to_check.extend_from_slice(extra_paths);
 
     let path_args = paths_to_check.join(" ");
@@ -27,7 +27,12 @@ pub fn get_processes_using_nvidia(extra_paths: &[String]) -> Result<Vec<(String,
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 {
-            procs.push((parts[0].to_string(), parts[1].to_string()));
+            let name = parts[0];
+            // Ignore nvidia-powerd (shows as nvidia-po) as it's a service we stop gracefully
+            if name.starts_with("nvidia-po") {
+                continue;
+            }
+            procs.push((name.to_string(), parts[1].to_string()));
         }
     }
     Ok(procs)
