@@ -95,7 +95,7 @@ impl PciDevice {
             let entry = entry?;
             let path = entry.path();
             let vendor_path = path.join("vendor");
-            let device_path = path.join("device"); // Device ID, not needed strictly if we trust vendor
+            // let device_path = path.join("device"); // Device ID, not needed strictly if we trust vendor
 
             if vendor_path.exists() {
                 let vendor = fs::read_to_string(vendor_path)?;

@@ -1,29 +1,24 @@
 use anyhow::{anyhow, Context, Result};
 use colored::*;
-use dialoguer::{Confirm, Select};
-use regex::Regex;
+use dialoguer::Select;
 use std::process::Command;
 
-pub fn get_processes_using_nvidia() -> Result<Vec<(String, String)>> {
-    // Run lsof, parse output
-    let output = Command::new("lsof")
-        .arg("-t") // terse, just PIDs
-        .arg("/dev/nvidia0")
-        .arg("/dev/nvidiactl")
-        .arg("/dev/nvidia-modeset")
-        // Add more common paths or use shell globbing (Command does not glob)
-        // Since we can't easily glob with Command, we might need to invoke via sh
-        .output();
+pub fn get_processes_using_nvidia(extra_paths: &[String]) -> Result<Vec<(String, String)>> {
+    // Basic nvidia paths that are always relevant
+    // We will use sh to run lsof with glob pattern for /dev/nvidia*
+    // And append specific DRI paths provided by caller
 
-    // A better approach is to use `fuser -v /dev/nvidia*` or iterate /proc
-    // But user suggested `lsof`.
-    // Let's use `lsof` with a shell generic list if possible, or common specific devices.
-    // Or iterate over /dev/nvidia*
+    let mut paths_to_check = vec!["/dev/nvidia*".to_string()];
+    paths_to_check.extend_from_slice(extra_paths);
 
-    // We will use sh to run lsof with glob pattern
+    let path_args = paths_to_check.join(" ");
+
     let output = Command::new("sh")
         .arg("-c")
-        .arg("lsof -w /dev/nvidia* /dev/dri/card* /dev/dri/renderD* | grep -v PID | awk '{print $1, $2}' | sort -u")
+        .arg(format!(
+            "lsof -w {} | grep -v PID | awk '{{print $1, $2}}' | sort -u",
+            path_args
+        ))
         .output()
         .context("Failed to run lsof")?;
 
@@ -38,9 +33,9 @@ pub fn get_processes_using_nvidia() -> Result<Vec<(String, String)>> {
     Ok(procs)
 }
 
-pub fn check_and_kill_processes() -> Result<()> {
+pub fn check_and_kill_processes(extra_paths: &[String]) -> Result<()> {
     loop {
-        let procs = get_processes_using_nvidia()?;
+        let procs = get_processes_using_nvidia(extra_paths)?;
         if procs.is_empty() {
             break;
         }

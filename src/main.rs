@@ -5,7 +5,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::*;
 use pci::PciDevice;
-use std::process;
 
 #[derive(Parser)]
 #[command(name = "nvsleepify")]
@@ -27,8 +26,8 @@ enum Commands {
 
 fn main() -> Result<()> {
     if unsafe { libc::geteuid() } != 0 {
-         println!("{}", "Warning: This program usually requires root privileges to control PCI power and services.".yellow());
-         println!("If commands fail, try running with sudo.");
+        println!("{}", "Warning: This program usually requires root privileges to control PCI power and services.".yellow());
+        println!("If commands fail, try running with sudo.");
     }
 
     let cli = Cli::parse();
@@ -52,27 +51,37 @@ fn status_command() -> Result<()> {
             if !nodes.is_empty() {
                 println!("  Device Nodes: {}", nodes.join(", ").blue());
             } else {
-                println!("  Device Nodes: {}", "None (Driver unbound or card off)".yellow());
+                println!(
+                    "  Device Nodes: {}",
+                    "None (Driver unbound or card off)".yellow()
+                );
             }
 
             let state = gpu.get_power_state();
-            let state_colored = if state == "D0" { state.green() } else { state.blue() };
+            let state_colored = if state == "D0" {
+                state.green()
+            } else {
+                state.blue()
+            };
             println!("  Power State: {}", state_colored);
-            
-            let procs = system::get_processes_using_nvidia().unwrap_or_default();
+
+            let procs = system::get_processes_using_nvidia(&nodes).unwrap_or_default();
             if !procs.is_empty() {
                 println!("  Status: {}", "Active (In Use)".red());
                 println!("  Blocking Processes: {}", procs.len());
             } else if state == "D3cold" {
                 println!("  Status: {}", "Off / D3cold".blue());
             } else if state.contains("D3") {
-                 println!("  Status: {}", "Suspended".yellow());
+                println!("  Status: {}", "Suspended".yellow());
             } else {
-                 println!("  Status: {}", "Idle / D0".green());
+                println!("  Status: {}", "Idle / D0".green());
             }
-        },
+        }
         Err(_) => {
-            println!("{}", "No Nvidia GPU running on PCI bus (or currently hidden/powered off).".red());
+            println!(
+                "{}",
+                "No Nvidia GPU running on PCI bus (or currently hidden/powered off).".red()
+            );
             println!("If you previously ran 'nvsleepify on', run 'nvsleepify off' to enable it.");
         }
     }
@@ -81,13 +90,16 @@ fn status_command() -> Result<()> {
 
 fn on_command() -> Result<()> {
     println!("{}", "=== Enabling Sleep Mode (Turning GPU OFF) ===".bold());
-    
+
     // 1. Find GPU
     let gpu = match PciDevice::find_nvidia_gpu() {
         Ok(g) => g,
         Err(e) => {
             eprintln!("{}", e);
-            println!("{}", "Continuing assuming GPU might be already off or not found...".yellow());
+            println!(
+                "{}",
+                "Continuing assuming GPU might be already off or not found...".yellow()
+            );
             return Ok(());
         }
     };
@@ -98,7 +110,7 @@ fn on_command() -> Result<()> {
     }
 
     // 2. Check/Kill Processes
-    system::check_and_kill_processes()?;
+    system::check_and_kill_processes(&nodes)?;
 
     // 3. Stop Services
     system::stop_services()?;
@@ -123,12 +135,11 @@ fn on_command() -> Result<()> {
 
 fn off_command() -> Result<()> {
     println!("{}", "=== Disabling Sleep Mode (Turning GPU ON) ===".bold());
-    
+
     // 1. Power On Slot & Find Slots
     // Try to find any disabled slots and turn them on.
     use std::fs;
     let slots_dir = std::path::Path::new("/sys/bus/pci/slots");
-    let mut turned_on = false;
     if slots_dir.exists() {
         if let Ok(entries) = fs::read_dir(slots_dir) {
             for entry in entries.flatten() {
@@ -139,20 +150,18 @@ fn off_command() -> Result<()> {
                     if content.trim() == "0" {
                         println!("Found slot {:?} powered OFF. Powering ON...", entry.path());
                         if let Err(e) = fs::write(&power_path, "1") {
-                             eprintln!("Failed to power on slot: {}", e);
-                        } else {
-                             turned_on = true;
+                            eprintln!("Failed to power on slot: {}", e);
                         }
                     }
                 }
             }
         }
     }
-    
+
     // 2. Rescan
     println!("Rescanning PCI bus...");
     PciDevice::rescan()?;
-    
+
     // Wait a bit
     std::thread::sleep(std::time::Duration::from_secs(1));
 
@@ -161,22 +170,24 @@ fn off_command() -> Result<()> {
     system::load_modules()?;
 
     // 4. Check if GPU appeared
-    let gpu = match PciDevice::find_nvidia_gpu() {
+    let _gpu = match PciDevice::find_nvidia_gpu() {
         Ok(g) => {
             println!("GPU found at {}.", g.address.cyan());
-            g 
-        },
+            g
+        }
         Err(_) => {
-             println!("{}", "Warning: GPU not found on bus yet. It might take more time or reboot.".yellow());
-             // We continue to start services just in case
-             PciDevice::new("0000:00:00.0") // dummy
+            println!(
+                "{}",
+                "Warning: GPU not found on bus yet. It might take more time or reboot.".yellow()
+            );
+            // We continue to start services just in case
+            PciDevice::new("0000:00:00.0") // dummy
         }
     };
-    
+
     // 5. Start Services
     system::start_services()?;
 
     println!("{}", "GPU Powered ON and Services Started.".green());
     Ok(())
 }
-
