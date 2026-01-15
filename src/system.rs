@@ -38,7 +38,9 @@ pub fn get_processes_using_nvidia(extra_paths: &[String]) -> Result<Vec<(String,
     Ok(procs)
 }
 
-pub fn check_and_kill_processes(extra_paths: &[String]) -> Result<()> {
+pub fn check_and_kill_processes(extra_paths: &[String], non_interactive: bool) -> Result<()> {
+    let mut retries = 6; // 6 * 5s = 30s timeout for non-interactive mode
+
     loop {
         let procs = get_processes_using_nvidia(extra_paths)?;
         if procs.is_empty() {
@@ -48,6 +50,25 @@ pub fn check_and_kill_processes(extra_paths: &[String]) -> Result<()> {
         println!("{}", "Processes using Nvidia GPU found:".yellow());
         for (name, pid) in &procs {
             println!("  {} (PID: {})", name, pid);
+        }
+
+        if non_interactive {
+            if retries > 0 {
+                println!(
+                    "Non-interactive mode: Waiting for processes to exit ({}s remaining)...",
+                    retries * 5
+                );
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                retries -= 1;
+                continue;
+            }
+
+            println!("Non-interactive mode: Timeout reached. Killing blocking processes...");
+            for (_, pid) in procs {
+                let _ = Command::new("kill").arg("-9").arg(&pid).status();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            continue;
         }
 
         let options = vec!["Refresh", "Kill found processes", "Abort"];

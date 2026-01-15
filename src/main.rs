@@ -22,6 +22,8 @@ enum Commands {
     On,
     /// Enable (Wake) the Nvidia GPU
     Off,
+    /// Restore last saved state (internal use)
+    Restore,
 }
 
 fn main() -> Result<()> {
@@ -34,8 +36,9 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Status => status_command()?,
-        Commands::On => on_command()?,
+        Commands::On => on_command(false)?,
         Commands::Off => off_command()?,
+        Commands::Restore => restore_command()?,
     }
 
     Ok(())
@@ -88,8 +91,10 @@ fn status_command() -> Result<()> {
     Ok(())
 }
 
-fn on_command() -> Result<()> {
+fn on_command(non_interactive: bool) -> Result<()> {
     println!("{}", "=== Enabling Sleep Mode (Turning GPU OFF) ===".bold());
+
+    save_state(true)?;
 
     // 1. Find GPU
     let gpu = match PciDevice::find_nvidia_gpu() {
@@ -110,7 +115,7 @@ fn on_command() -> Result<()> {
     }
 
     // 2. Check/Kill Processes
-    system::check_and_kill_processes(&nodes)?;
+    system::check_and_kill_processes(&nodes, non_interactive)?;
 
     // 3. Stop Services
     system::stop_services()?;
@@ -135,6 +140,8 @@ fn on_command() -> Result<()> {
 
 fn off_command() -> Result<()> {
     println!("{}", "=== Disabling Sleep Mode (Turning GPU ON) ===".bold());
+
+    save_state(false)?;
 
     // 1. Power On Slot & Find Slots
     // Try to find any disabled slots and turn them on.
@@ -189,5 +196,40 @@ fn off_command() -> Result<()> {
     system::start_services()?;
 
     println!("{}", "GPU Powered ON and Services Started.".green());
+    Ok(())
+}
+
+const STATE_FILE: &str = "/var/lib/nvsleepify/state";
+
+fn save_state(sleep_enabled: bool) -> Result<()> {
+    if unsafe { libc::geteuid() } != 0 {
+        // Can't save state if not root, likely standard user running check
+        return Ok(());
+    }
+    let path = std::path::Path::new(STATE_FILE);
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let content = if sleep_enabled { "on" } else { "off" };
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+fn restore_command() -> Result<()> {
+    let path = std::path::Path::new(STATE_FILE);
+    if !path.exists() {
+        println!("No state file found. Doing nothing.");
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(path)?.trim().to_string();
+    if content == "on" {
+        println!("Restoring state: Sleep Enabled (GPU OFF)");
+        on_command(true)?;
+    } else {
+        println!("Restoring state: Sleep Disabled (GPU ON)");
+        off_command()?;
+    }
     Ok(())
 }
