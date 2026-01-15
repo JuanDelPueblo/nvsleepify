@@ -1,6 +1,8 @@
 # nvsleepify
 
-`nvsleepify` is a lightweight Rust CLI tool designed for Linux users who want to manually control the power state of their Nvidia dGPU. It effectively "sleeps" (powers off) and "wakes" (powers on) the GPU on demand, which is particularly useful for laptops or hybrid graphics setups where battery life or noise control is a priority.
+`nvsleepify` is a lightweight tool written in Rust designed for Linux users who want their Nvidia dGPU to stay off. It effectively "sleeps" (powers off) and "wakes" (powers on) the GPU on demand, which is useful to prevent programs randomly waking up the dGPU wasting battery life.
+
+Note: I wrote this program for personal use on an Asus Zephyrus G14 2024 running CachyOS. I cannot guarantee this program will function correctly on your system, but if you encounter any issues let me know and I can try helping fix any issues when I have time.
 
 ## Features
 
@@ -16,12 +18,12 @@
     -   Rescans the PCI bus to rediscover the device.
     -   Reloads kernel modules.
     -   Restarts Nvidia services.
+-   **Systemd Service**: Restores the last saved nvsleepify mode on boot or resume.
 
 ## Prerequisites
 
--   **Linux OS** (Tested with systemd distributions).
--   **Nvidia Proprietary Drivers** (The tool expects standard Nvidia module names).
--   **Root Privileges**: Access to `/sys/bus/pci` and service management requires `sudo`.
+-   **Linux OS with Systemd**
+-   **Nvidia dGPU**
 -   **Dependencies**:
     -   `lsof` (for detecting processes using the GPU).
     -   `systemd` (for managing services).
@@ -56,8 +58,6 @@ sudo ./target/release/nvsleepify status
 
 ## Usage
 
-**Note:** Most commands require root privileges to interact with hardware and system services.
-
 ### Check Status
 ```bash
 sudo nvsleepify status
@@ -76,9 +76,10 @@ sudo nvsleepify off
 ```
 This command reverses the shutdown sequence, powering on the slot, rescanning the bus, and reloading drivers.
 
-## Troubleshooting
+### Restore on boot or resume
 
--   **Slot Power Control**: This tool writes to `/sys/bus/pci/slots/*/power`. If your hardware/BIOS does not expose PCI slots control via ACPI, this feature might not work.
--   **Modules Busy**: If `nvsleepify on` fails to unload modules, ensure no background processes (like Xorg or Wayland compositors bound to the Nvidia card) are running.
--   **Permission Denied**: Ensure you are running with `sudo`.
+```bash
+sudo systemctl enable --now nvsleepify.service
+```
+This service will ensure your last saved mode will be restored anytime the computer boots or resumes from sleep.
 
