@@ -2,7 +2,18 @@
 
 `nvsleepify` is a lightweight tool written in Rust designed for Linux users who want their Nvidia dGPU to stay off. It effectively "sleeps" (powers off) and "wakes" (powers on) the GPU on demand, which is useful to prevent programs randomly waking up the dGPU wasting battery life.
 
-Note: I wrote this program for personal use on an Asus Zephyrus G14 2024 running CachyOS. I cannot guarantee this program will function correctly on your system, but if you encounter any issues let me know and I can try helping fix any issues when I have time.
+
+## Notes
+
+-    I wrote this program for personal use on an Asus Zephyrus G14 2024 running CachyOS. I cannot guarantee this program will function correctly on your system, but if you encounter any issues let me know and I can try helping fix any issues when I have time.
+-    If using KDE Plasma, add these environment variables to `/etc/environment` to ensure Kwin doesn't hold the dGPU hostage if you use external displays
+
+```bash
+KWIN_DRM_DEVICES=/dev/dri/card0:/dev/dri/card1 # where the first card is the iGPU and the second card is the dGPU
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+__GLX_VENDOR_LIBRARY_NAME=mesa
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json # different for Intel iGPUs
+```
 
 ## Features
 
