@@ -83,3 +83,7 @@ sudo systemctl enable --now nvsleepify.service
 ```
 This service will ensure your last saved mode will be restored anytime the computer boots or resumes from sleep.
 
+## References used
+
+* https://github.com/Bensikrac/VFIO-Nvidia-dynamic-unbind
+* https://gitlab.com/asus-linux/supreme-chainsaw/-/wikis/Manual-Steps-Guide
