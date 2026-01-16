@@ -50,7 +50,7 @@ You can build and install `nvsleepify` using the provided Makefile.
 git clone https://github.com/JuanDelPueblo/nvsleepify.git
 cd nvsleepify
 
-# Build and Install (installs to /usr/local/bin by default)
+# Build and Install
 sudo make install
 ```
 
@@ -58,13 +58,6 @@ To uninstall:
 
 ```bash
 sudo make uninstall
-```
-
-Alternatively, checking out the code and running with cargo:
-
-```bash
-cargo build --release
-sudo ./target/release/nvsleepify status
 ```
 
 ## Usage
