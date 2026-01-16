@@ -62,30 +62,29 @@ sudo make uninstall
 
 ## Usage
 
+To use this tool you must enable the `nvsleepifyd` service as follows:
+
+```bash
+sudo systemctl enable --now nvsleepifyd.service
+```
+
 ### Check Status
 ```bash
-sudo nvsleepify status
+nvsleepify status
 ```
 Displays the current PCI address, power state (D0/D3cold), and lists any device nodes or blocking processes.
 
 ### Sleep GPU (Turn Off)
 ```bash
-sudo nvsleepify on
+nvsleepify on
 ```
 This command performs the shutdown sequence. If processes are found using the GPU, it will prompt you interactively to kill them or abort.
 
 ### Wake GPU (Turn On)
 ```bash
-sudo nvsleepify off
+nvsleepify off
 ```
 This command reverses the shutdown sequence, powering on the slot, rescanning the bus, and reloading drivers.
-
-### Restore on boot or resume
-
-```bash
-sudo systemctl enable --now nvsleepifyd.service
-```
-This service will ensure your last saved mode will be restored anytime the computer boots or resumes from sleep.
 
 ## References used
 
