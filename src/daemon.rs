@@ -1,15 +1,11 @@
 use crate::pci::PciDevice;
-use crate::protocol::{Command, Response};
 use crate::system;
 use anyhow::Result;
 use futures_util::StreamExt;
 use std::fmt::Write;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
 use tokio::task::spawn_blocking;
-use zbus::dbus_proxy;
+use zbus::{dbus_interface, dbus_proxy, ConnectionBuilder};
 
-const SOCKET_PATH: &str = "/run/nvsleepify.sock";
 const STATE_FILE: &str = "/var/lib/nvsleepify/state";
 
 #[dbus_proxy(
@@ -22,66 +18,63 @@ trait LoginManager {
     fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
 }
 
-pub async fn run() -> Result<()> {
-    if std::fs::metadata(SOCKET_PATH).is_ok() {
-        let _ = std::fs::remove_file(SOCKET_PATH);
+struct NvSleepifyManager;
+
+#[dbus_interface(name = "org.nvsleepify.Manager")]
+impl NvSleepifyManager {
+    async fn status(&self) -> String {
+        spawn_blocking(move || status_logic())
+            .await
+            .unwrap_or_else(|e| format!("Internal error: {}", e))
     }
 
-    let listener = UnixListener::bind(SOCKET_PATH)?;
+    /// Sleep the GPU.
+    /// Returns: (success, message, blocking_processes)
+    async fn sleep(&self, kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
+        spawn_blocking(move || sleep_logic(kill_procs))
+            .await
+            .unwrap_or_else(|e| (false, format!("Internal error: {}", e), vec![]))
+    }
 
-    // Set permissions to 666 so anyone can connect
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(SOCKET_PATH, std::fs::Permissions::from_mode(0o666))?;
+    /// Wake the GPU.
+    /// Returns: (success, message)
+    async fn wake(&self) -> (bool, String) {
+        spawn_blocking(move || wake_logic())
+            .await
+            .unwrap_or_else(|e| (false, format!("Internal error: {}", e)))
+    }
+}
 
-    println!("Daemon listening on {}", SOCKET_PATH);
+pub async fn run() -> Result<()> {
+    println!("Starting NvSleepify D-Bus daemon...");
 
     // Restore state on startup
     println!("Restoring previous state...");
-    let _ = spawn_blocking(|| match restore() {
-        Response::Ok => println!("State restore successful"),
-        Response::Error(e) => eprintln!("State restore failed: {}", e),
-        _ => {}
+    let _ = spawn_blocking(|| match restore_logic() {
+        Ok(_) => println!("State restore successful"),
+        Err(e) => eprintln!("State restore failed: {}", e),
     })
     .await;
 
-    // Spawn sleep monitor
+    // Spawn sleep monitor in background
     tokio::spawn(async {
         if let Err(e) = monitor_sleep_signal().await {
             eprintln!("Sleep monitor error: {}", e);
         }
     });
 
-    loop {
-        match listener.accept().await {
-            Ok((mut socket, _addr)) => {
-                tokio::spawn(async move {
-                    let mut buf = vec![0; 4096];
-                    let n = match socket.read(&mut buf).await {
-                        Ok(n) if n == 0 => return,
-                        Ok(n) => n,
-                        Err(_) => return,
-                    };
+    // Setup D-Bus connection
+    let _conn = ConnectionBuilder::system()?
+        .name("org.nvsleepify.Service")?
+        .serve_at("/org/nvsleepify/Manager", NvSleepifyManager)?
+        .build()
+        .await?;
 
-                    let req: Command = match serde_json::from_slice(&buf[..n]) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            let _ = socket
-                                .write_all(
-                                    &serde_json::to_vec(&Response::Error(e.to_string())).unwrap(),
-                                )
-                                .await;
-                            return;
-                        }
-                    };
+    println!("Daemon listening on system bus: org.nvsleepify.Service");
 
-                    let resp = handle_command(req);
-                    let resp_bytes = serde_json::to_vec(&resp).unwrap();
-                    let _ = socket.write_all(&resp_bytes).await;
-                });
-            }
-            Err(e) => eprintln!("Accept error: {}", e),
-        }
-    }
+    // Keep running indefinitely (the connection will handle incoming messages)
+    std::future::pending::<()>().await;
+    Ok(())
 }
 
 async fn monitor_sleep_signal() -> Result<()> {
@@ -97,10 +90,9 @@ async fn monitor_sleep_signal() -> Result<()> {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
                     println!("Restoring state...");
-                    let _ = spawn_blocking(|| match restore() {
-                        Response::Ok => println!("Restore successful"),
-                        Response::Error(e) => eprintln!("Restore failed: {}", e),
-                        _ => {}
+                    let _ = spawn_blocking(|| match restore_logic() {
+                        Ok(_) => println!("Restore successful"),
+                        Err(e) => eprintln!("Restore failed: {}", e),
                     })
                     .await;
                 }
@@ -109,14 +101,6 @@ async fn monitor_sleep_signal() -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn handle_command(cmd: Command) -> Response {
-    match cmd {
-        Command::Status => status(),
-        Command::Sleep { kill_procs } => sleep(kill_procs),
-        Command::Wake => wake(),
-    }
 }
 
 fn save_state(sleep_enabled: bool) -> Result<()> {
@@ -131,7 +115,7 @@ fn save_state(sleep_enabled: bool) -> Result<()> {
     Ok(())
 }
 
-fn status() -> Response {
+fn status_logic() -> String {
     let mut output = String::new();
     match PciDevice::find_nvidia_gpu() {
         Ok(gpu) => {
@@ -173,54 +157,60 @@ fn status() -> Response {
             .unwrap();
         }
     }
-    Response::StatusOutput(output)
+    output
 }
 
-fn sleep(kill_procs: bool) -> Response {
+fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
     if let Err(e) = save_state(true) {
-        return Response::Error(format!("Failed to save state: {}", e));
+        return (false, format!("Failed to save state: {}", e), vec![]);
     }
 
     let gpu = match PciDevice::find_nvidia_gpu() {
         Ok(g) => g,
-        Err(_) => return Response::Ok, // Already off
+        Err(_) => {
+            return (
+                true,
+                "Nvidia GPU not found (already off?)".to_string(),
+                vec![],
+            )
+        }
     };
 
     let nodes = gpu.get_device_nodes();
     match system::get_processes_using_nvidia(&nodes) {
         Ok(procs) if !procs.is_empty() => {
             if !kill_procs {
-                return Response::ProcessesRunning(procs);
+                return (false, "Blocking processes found".to_string(), procs);
             }
             if let Err(e) = system::kill_processes(&procs) {
-                return Response::Error(format!("Failed to kill processes: {}", e));
+                return (false, format!("Failed to kill processes: {}", e), vec![]);
             }
             // Give time for processes to die
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        Err(e) => return Response::Error(format!("Failed to checking processes: {}", e)),
+        Err(e) => return (false, format!("Failed checking processes: {}", e), vec![]),
         _ => {}
     }
 
     if let Err(e) = system::stop_services() {
-        return Response::Error(format!("Failed to stop services: {}", e));
+        return (false, format!("Failed to stop services: {}", e), vec![]);
     }
     if let Err(e) = system::unload_modules() {
-        return Response::Error(format!("Failed to unload modules: {}", e));
+        return (false, format!("Failed to unload modules: {}", e), vec![]);
     }
     if let Err(e) = gpu.unbind_driver() {
-        return Response::Error(format!("Failed to unbind driver: {}", e));
+        return (false, format!("Failed to unbind driver: {}", e), vec![]);
     }
     if let Err(e) = gpu.set_slot_power(false) {
-        return Response::Error(format!("Failed to power off slot: {}", e));
+        return (false, format!("Failed to power off slot: {}", e), vec![]);
     }
 
-    Response::Ok
+    (true, "Success".to_string(), vec![])
 }
 
-fn wake() -> Response {
+fn wake_logic() -> (bool, String) {
     if let Err(e) = save_state(false) {
-        return Response::Error(format!("Failed to save state: {}", e));
+        return (false, format!("Failed to save state: {}", e));
     }
 
     use std::fs;
@@ -243,31 +233,27 @@ fn wake() -> Response {
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     if let Err(e) = system::load_modules() {
-        return Response::Error(format!("Failed to load modules: {}", e));
+        return (false, format!("Failed to load modules: {}", e));
     }
-
-    // Check if GPU appeared (optional check) but we proceed anyway
 
     if let Err(e) = system::start_services() {
-        return Response::Error(format!("Failed to start services: {}", e));
+        return (false, format!("Failed to start services: {}", e));
     }
 
-    Response::Ok
+    (true, "Success".to_string())
 }
 
-fn restore() -> Response {
+fn restore_logic() -> Result<()> {
     let path = std::path::Path::new(STATE_FILE);
     if !path.exists() {
-        return Response::Ok;
+        return Ok::<(), anyhow::Error>(());
     }
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c.trim().to_string(),
-        Err(e) => return Response::Error(e.to_string()),
-    };
+    let content = std::fs::read_to_string(path)?.trim().to_string();
 
     if content == "on" {
-        sleep(true) // Force sleep on restore
+        sleep_logic(true); // Force sleep
     } else {
-        wake()
+        wake_logic();
     }
+    Ok(())
 }
