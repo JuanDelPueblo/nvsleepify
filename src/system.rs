@@ -55,6 +55,8 @@ pub fn stop_services() -> Result<()> {
         "nvidia-suspend.service",
         "nvidia-hibernate.service",
         "nvidia-resume.service",
+        "nvidia-persistenced.service",
+        "nvidia-powerd.service",
     ];
     for svc in services_to_disable {
         let _ = Command::new("systemctl").arg("disable").arg(svc).status();
@@ -73,6 +75,8 @@ pub fn start_services() -> Result<()> {
         "nvidia-suspend.service",
         "nvidia-hibernate.service",
         "nvidia-resume.service",
+        "nvidia-persistenced.service",
+        "nvidia-powerd.service",
     ];
     for svc in services_to_enable {
         let _ = Command::new("systemctl").arg("enable").arg(svc).status();
