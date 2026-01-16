@@ -35,6 +35,15 @@ pub async fn run() -> Result<()> {
 
     println!("Daemon listening on {}", SOCKET_PATH);
 
+    // Restore state on startup
+    println!("Restoring previous state...");
+    let _ = spawn_blocking(|| match restore() {
+        Response::Ok => println!("State restore successful"),
+        Response::Error(e) => eprintln!("State restore failed: {}", e),
+        _ => {}
+    })
+    .await;
+
     // Spawn sleep monitor
     tokio::spawn(async {
         if let Err(e) = monitor_sleep_signal().await {
