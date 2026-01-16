@@ -11,6 +11,7 @@ use zbus::{dbus_proxy, Connection};
 )]
 trait NvSleepifyManager {
     fn status(&self) -> zbus::Result<String>;
+    fn info(&self) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
     fn sleep(&self, kill_procs: bool) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
     fn wake(&self) -> zbus::Result<(bool, String)>;
 }

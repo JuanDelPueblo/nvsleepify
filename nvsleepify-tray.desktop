@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=nvsleepify Tray
+Comment=Tray icon for Nvidia GPU sleep/wake (nvsleepify)
+Exec=nvsleepify-tray
+Icon=nvsleepify-gpu-active
+Terminal=false
+Type=Application
+Categories=System;Utility;
+StartupNotify=false

@@ -28,6 +28,14 @@ impl NvSleepifyManager {
             .unwrap_or_else(|e| format!("Internal error: {}", e))
     }
 
+    /// Read-only info for UIs.
+    /// Returns: (sleep_enabled, power_state, blocking_processes)
+    async fn info(&self) -> (bool, String, Vec<(String, String)>) {
+        spawn_blocking(move || info_logic())
+            .await
+            .unwrap_or_else(|e| (false, format!("Internal error: {}", e), vec![]))
+    }
+
     /// Sleep the GPU.
     /// Returns: (success, message, blocking_processes)
     async fn sleep(&self, kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
@@ -113,6 +121,28 @@ fn save_state(sleep_enabled: bool) -> Result<()> {
     let content = if sleep_enabled { "on" } else { "off" };
     std::fs::write(path, content)?;
     Ok(())
+}
+
+fn load_state() -> bool {
+    let path = std::path::Path::new(STATE_FILE);
+    if let Ok(content) = std::fs::read_to_string(path) {
+        return content.trim() == "on";
+    }
+    false
+}
+
+fn info_logic() -> (bool, String, Vec<(String, String)>) {
+    let sleep_enabled = load_state();
+
+    match PciDevice::find_nvidia_gpu() {
+        Ok(gpu) => {
+            let nodes = gpu.get_device_nodes();
+            let power_state = gpu.get_power_state();
+            let procs = system::get_processes_using_nvidia(&nodes).unwrap_or_default();
+            (sleep_enabled, power_state, procs)
+        }
+        Err(_) => (sleep_enabled, "NotFound".to_string(), vec![]),
+    }
 }
 
 fn status_logic() -> String {

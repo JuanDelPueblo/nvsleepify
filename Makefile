@@ -2,8 +2,11 @@ PREFIX ?= /usr/local
 BIN_DIR = $(PREFIX)/bin
 BINARY_NAME = nvsleepify
 DAEMON_BINARY_NAME = nvsleepifyd
+TRAY_BINARY_NAME = nvsleepify-tray
 TARGET_DIR = target/release
 DBUS_CONF_DIR ?= /etc/dbus-1/system.d
+APPLICATIONS_DIR = $(PREFIX)/share/applications
+ICONS_DIR = $(PREFIX)/share/icons/hicolor/scalable/apps
 
 .PHONY: all build install uninstall clean
 
@@ -16,20 +19,32 @@ install: build
 	install -d $(BIN_DIR)
 	install -m 755 $(TARGET_DIR)/$(BINARY_NAME) $(BIN_DIR)/$(BINARY_NAME)
 	install -m 755 $(TARGET_DIR)/$(DAEMON_BINARY_NAME) $(BIN_DIR)/$(DAEMON_BINARY_NAME)
+	install -m 755 $(TARGET_DIR)/$(TRAY_BINARY_NAME) $(BIN_DIR)/$(TRAY_BINARY_NAME)
 	install -d /etc/systemd/system
 	install -m 644 nvsleepifyd.service /etc/systemd/system/nvsleepifyd.service
 	install -d $(DBUS_CONF_DIR)
 	install -m 644 org.nvsleepify.conf $(DBUS_CONF_DIR)/org.nvsleepify.conf
+	install -d $(APPLICATIONS_DIR)
+	install -m 644 nvsleepify-tray.desktop $(APPLICATIONS_DIR)/nvsleepify-tray.desktop
+	install -d $(ICONS_DIR)
+	install -m 644 icons/nvsleepify-gpu-active.svg $(ICONS_DIR)/nvsleepify-gpu-active.svg
+	install -m 644 icons/nvsleepify-gpu-suspended.svg $(ICONS_DIR)/nvsleepify-gpu-suspended.svg
+	install -m 644 icons/nvsleepify-gpu-off.svg $(ICONS_DIR)/nvsleepify-gpu-off.svg
 	systemctl daemon-reload
 	systemctl reload dbus || true
-	@echo "Installed $(BINARY_NAME) and $(DAEMON_BINARY_NAME)"
+	@echo "Installed $(BINARY_NAME), $(DAEMON_BINARY_NAME), and $(TRAY_BINARY_NAME)"
 
 uninstall:
 	systemctl disable --now nvsleepifyd.service || true
 	rm -f $(BIN_DIR)/$(BINARY_NAME)
 	rm -f $(BIN_DIR)/$(DAEMON_BINARY_NAME)
+	rm -f $(BIN_DIR)/$(TRAY_BINARY_NAME)
 	rm -f /etc/systemd/system/nvsleepifyd.service
 	rm -f $(DBUS_CONF_DIR)/org.nvsleepify.conf
+	rm -f $(APPLICATIONS_DIR)/nvsleepify-tray.desktop
+	rm -f $(ICONS_DIR)/nvsleepify-gpu-active.svg
+	rm -f $(ICONS_DIR)/nvsleepify-gpu-suspended.svg
+	rm -f $(ICONS_DIR)/nvsleepify-gpu-off.svg
 	systemctl daemon-reload
 	systemctl reload dbus || true
 	@echo "Uninstalled $(BINARY_NAME)"
