@@ -1,0 +1,11 @@
+[Unit]
+Description=nvsleepify Daemon
+
+[Service]
+ExecStart=/usr/local/bin/nvsleepifyd
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

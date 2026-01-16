@@ -90,7 +90,7 @@ This command reverses the shutdown sequence, powering on the slot, rescanning th
 ### Restore on boot or resume
 
 ```bash
-sudo systemctl enable --now nvsleepify.service
+sudo systemctl enable --now nvsleepifyd.service
 ```
 This service will ensure your last saved mode will be restored anytime the computer boots or resumes from sleep.
 
