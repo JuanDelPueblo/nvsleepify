@@ -15,7 +15,7 @@ all: build
 build:
 	cargo build --release
 
-install: build
+install:
 	install -d $(BIN_DIR)
 	install -m 755 $(TARGET_DIR)/$(BINARY_NAME) $(BIN_DIR)/$(BINARY_NAME)
 	install -m 755 $(TARGET_DIR)/$(DAEMON_BINARY_NAME) $(BIN_DIR)/$(DAEMON_BINARY_NAME)
