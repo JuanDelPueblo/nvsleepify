@@ -90,7 +90,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json # different for 
 [Backlight]
 EnableDDC=false
 ```
--    On Fedora, you must mask `nvidia-fallback.service` using systemctl and deactivate the `nvidia-settings-user.desktop` autostart entry found in `/etc/xdg/autostart` by copying it to ~/.config/autostart/ and setting the `Hidden` field to `true`. This prevents the GPU from waking up on sleep and on initial boot up.
+-    On Fedora, you must deactivate the `nvidia-settings-user.desktop` autostart entry found in `/etc/xdg/autostart` by copying it to ~/.config/autostart/ and setting the `Hidden` field to `true`. This prevents the GPU from waking up on initial boot up.
 
 ## References used
 

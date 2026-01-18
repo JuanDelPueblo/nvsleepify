@@ -39,16 +39,41 @@ pub fn get_processes_using_nvidia(extra_paths: &[String]) -> Result<Vec<(String,
 
 pub fn kill_processes(procs: &[(String, String)]) -> Result<()> {
     for (_, pid) in procs {
-        let _ = Command::new("kill").arg("-9").arg(pid).status();
+        let _ = Command::new("kill").arg("-15").arg(pid).status();
     }
     Ok(())
+}
+
+fn run_systemctl(action: &str, service: &str) {
+    match Command::new("systemctl").arg(action).arg(service).status() {
+        Ok(status) => {
+            if !status.success() {
+                eprintln!(
+                    "{} Failed to {} {}: {}",
+                    "WARN:".yellow(),
+                    action,
+                    service,
+                    status
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "{} Failed to execute systemctl {} {}: {}",
+                "WARN:".yellow(),
+                action,
+                service,
+                e
+            );
+        }
+    }
 }
 
 pub fn stop_services() -> Result<()> {
     println!("{}", "Stopping systemd services...".blue());
     let services = ["nvidia-persistenced", "nvidia-powerd"];
     for svc in services {
-        let _ = Command::new("systemctl").arg("stop").arg(svc).status();
+        run_systemctl("stop", svc);
     }
 
     let services_to_disable = [
@@ -59,16 +84,25 @@ pub fn stop_services() -> Result<()> {
         "nvidia-powerd.service",
     ];
     for svc in services_to_disable {
-        let _ = Command::new("systemctl").arg("disable").arg(svc).status();
+        run_systemctl("disable", svc);
     }
+
+    // Mask nvidia-fallback.service to prevent it from interfering
+    run_systemctl("stop", "nvidia-fallback.service");
+    run_systemctl("mask", "nvidia-fallback.service");
+
     Ok(())
 }
 
 pub fn start_services() -> Result<()> {
     println!("{}", "Starting systemd services...".blue());
+
+    // Unmask nvidia-fallback.service
+    run_systemctl("unmask", "nvidia-fallback.service");
+
     let services = ["nvidia-persistenced", "nvidia-powerd"];
     for svc in services {
-        let _ = Command::new("systemctl").arg("start").arg(svc).status();
+        run_systemctl("start", svc);
     }
 
     let services_to_enable = [
@@ -79,7 +113,7 @@ pub fn start_services() -> Result<()> {
         "nvidia-powerd.service",
     ];
     for svc in services_to_enable {
-        let _ = Command::new("systemctl").arg("enable").arg(svc).status();
+        run_systemctl("enable", svc);
     }
     Ok(())
 }
