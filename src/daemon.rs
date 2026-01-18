@@ -1,22 +1,12 @@
 use crate::pci::PciDevice;
 use crate::system;
 use anyhow::Result;
-use futures_util::StreamExt;
+
 use std::fmt::Write;
 use tokio::task::spawn_blocking;
-use zbus::{dbus_interface, dbus_proxy, ConnectionBuilder};
+use zbus::{dbus_interface, ConnectionBuilder};
 
 const STATE_FILE: &str = "/var/lib/nvsleepify/state";
-
-#[dbus_proxy(
-    interface = "org.freedesktop.login1.Manager",
-    default_service = "org.freedesktop.login1",
-    default_path = "/org/freedesktop/login1"
-)]
-trait LoginManager {
-    #[dbus_proxy(signal)]
-    fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
-}
 
 struct NvSleepifyManager;
 
@@ -64,13 +54,6 @@ pub async fn run() -> Result<()> {
     })
     .await;
 
-    // Spawn sleep monitor in background
-    tokio::spawn(async {
-        if let Err(e) = monitor_sleep_signal().await {
-            eprintln!("Sleep monitor error: {}", e);
-        }
-    });
-
     // Setup D-Bus connection
     let _conn = ConnectionBuilder::system()?
         .name("org.nvsleepify.Service")?
@@ -82,32 +65,6 @@ pub async fn run() -> Result<()> {
 
     // Keep running indefinitely (the connection will handle incoming messages)
     std::future::pending::<()>().await;
-    Ok(())
-}
-
-async fn monitor_sleep_signal() -> Result<()> {
-    let connection = zbus::Connection::system().await?;
-    let manager = LoginManagerProxy::new(&connection).await?;
-    let mut stream = manager.receive_prepare_for_sleep().await?;
-
-    while let Some(signal) = stream.next().await {
-        match signal.args() {
-            Ok(args) => {
-                if !args.start {
-                    println!("System resumed from sleep. Waiting 5s before restore...");
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-                    println!("Restoring state...");
-                    let _ = spawn_blocking(|| match restore_logic() {
-                        Ok(_) => println!("Restore successful"),
-                        Err(e) => eprintln!("Restore failed: {}", e),
-                    })
-                    .await;
-                }
-            }
-            Err(e) => eprintln!("Error parsing signal args: {}", e),
-        }
-    }
     Ok(())
 }
 
