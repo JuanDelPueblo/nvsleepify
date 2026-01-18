@@ -5,7 +5,7 @@
 
 ## Notes
 
--    I wrote this program for personal use on an Asus Zephyrus G14 2024 running CachyOS. I cannot guarantee this program will function correctly on your system, but if you encounter any issues let me know and I can try helping fix any issues when I have time.
+-    I wrote this program for personal use on an Asus Zephyrus G14 2024 running Fedora. I cannot guarantee this program will function correctly on your system, but if you encounter any issues let me know and I can try helping fix any issues when I have time.
 -    If using KDE Plasma, add these environment variables to `/etc/environment` to ensure Kwin doesn't hold the dGPU hostage if you use external displays
 
 ```bash
@@ -14,6 +14,8 @@ __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
 __GLX_VENDOR_LIBRARY_NAME=mesa
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json # different for Intel iGPUs
 ```
+
+-    On Fedora, you must mask `nvidia-fallback.service` using systemctl and deactivate the `nvidia-settings-user.desktop` autostart entry found in `/etc/xdg/autostart` by copying it to ~/.config/autostart/ and setting the `Hidden` field to `true`. This prevents the GPU from waking up on sleep and on initial boot up.
 
 ## Features
 
