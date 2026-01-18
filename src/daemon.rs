@@ -43,6 +43,43 @@ impl NvSleepifyManager {
     }
 }
 
+async fn monitor_loop() {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+
+        let should_sleep = spawn_blocking(|| {
+            if !load_state() {
+                return false;
+            }
+            // Check if GPU is present and awake
+            match PciDevice::find_nvidia_gpu() {
+                Ok(gpu) => {
+                    let state = gpu.get_power_state();
+                    // If we see D0 or Unknown, treat it as "Awake"
+                    state == "D0" || state == "Unknown"
+                }
+                Err(_) => {
+                    // Not found means it's likely powered off or safe
+                    false
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        if should_sleep {
+            println!("Monitor: GPU detected in high power state while sleep is enabled. Attempting to disable...");
+            let res = spawn_blocking(|| sleep_logic(true)).await;
+            match res {
+                Ok((true, _, _)) => println!("Monitor: Successfully enforced sleep."),
+                Ok((false, msg, _)) => eprintln!("Monitor: Failed to enforce sleep: {}", msg),
+                Err(e) => eprintln!("Monitor: Internal error executing sleep logic: {}", e),
+            }
+        }
+    }
+}
+
 pub async fn run() -> Result<()> {
     println!("Starting NvSleepify D-Bus daemon...");
 
@@ -53,6 +90,9 @@ pub async fn run() -> Result<()> {
         Err(e) => eprintln!("State restore failed: {}", e),
     })
     .await;
+
+    // Start background monitoring
+    tokio::spawn(monitor_loop());
 
     // Setup D-Bus connection
     let _conn = ConnectionBuilder::system()?
