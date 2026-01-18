@@ -1,5 +1,8 @@
 use anyhow::{anyhow, Result};
 use ksni::TrayMethods;
+use notify_rust::Notification;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use zbus::{dbus_proxy, Connection};
 
@@ -18,6 +21,7 @@ trait NvSleepifyManager {
 #[derive(Debug, Clone, Copy)]
 enum TrayCommand {
     Toggle,
+    ToggleNotifications,
     Quit,
 }
 
@@ -32,6 +36,7 @@ struct UiState {
 #[derive(Debug)]
 struct NvSleepifyTray {
     state: UiState,
+    notifications_enabled: Arc<AtomicBool>,
     tx: mpsc::UnboundedSender<TrayCommand>,
 }
 
@@ -139,6 +144,18 @@ impl ksni::Tray for NvSleepifyTray {
                 ..Default::default()
             }
             .into(),
+            CheckmarkItem {
+                label: "Notifications".into(),
+                checked: self.notifications_enabled.load(Ordering::Relaxed),
+                activate: {
+                    let tx = self.tx.clone();
+                    Box::new(move |_| {
+                        let _ = tx.send(TrayCommand::ToggleNotifications);
+                    })
+                },
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
             StandardItem {
                 label: "Quit".into(),
@@ -176,6 +193,13 @@ fn confirm_kill_processes(procs: &[(String, String)]) -> bool {
     matches!(result, rfd::MessageDialogResult::Yes)
 }
 
+fn is_gpu_driver_loaded() -> bool {
+    if let Ok(content) = std::fs::read_to_string("/proc/modules") {
+        return content.lines().any(|l| l.starts_with("nvidia "));
+    }
+    false
+}
+
 async fn fetch_info(proxy: &NvSleepifyManagerProxy<'_>) -> UiState {
     match proxy.info().await {
         Ok((enabled, power_state, processes)) => UiState {
@@ -210,8 +234,10 @@ async fn main() -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<TrayCommand>();
 
     let initial_state = fetch_info(&proxy).await;
+    let notifications_enabled = Arc::new(AtomicBool::new(true));
     let tray = NvSleepifyTray {
-        state: initial_state,
+        state: initial_state.clone(),
+        notifications_enabled: notifications_enabled.clone(),
         tx,
     };
 
@@ -224,14 +250,47 @@ async fn main() -> Result<()> {
     {
         let handle = handle.clone();
         let proxy = NvSleepifyManagerProxy::new(&connection).await?;
+        let notifications_enabled = notifications_enabled.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            let mut last_state = initial_state;
             loop {
                 interval.tick().await;
-                let state = fetch_info(&proxy).await;
+                let new_state = fetch_info(&proxy).await;
+
+                if notifications_enabled.load(Ordering::Relaxed) {
+                    if last_state.power_state != "D0" && new_state.power_state == "D0" {
+                        if is_gpu_driver_loaded() {
+                            tokio::task::spawn_blocking(|| {
+                                let _ = Notification::new()
+                                    .summary("nvsleepify")
+                                    .body("GPU Woke up (D0)")
+                                    .show();
+                            });
+                        }
+                    }
+                    if last_state.power_state != "D3cold" && new_state.power_state == "D3cold" {
+                        tokio::task::spawn_blocking(|| {
+                            let _ = Notification::new()
+                                .summary("nvsleepify")
+                                .body("GPU Suspended (D3cold)")
+                                .show();
+                        });
+                    }
+                    if !last_state.enabled && new_state.enabled {
+                        tokio::task::spawn_blocking(|| {
+                            let _ = Notification::new()
+                                .summary("nvsleepify")
+                                .body("nvsleepify enabled")
+                                .show();
+                        });
+                    }
+                }
+
+                last_state = new_state.clone();
                 let _ = handle
-                    .update(|tray: &mut NvSleepifyTray| {
-                        tray.state = state.clone();
+                    .update(move |tray: &mut NvSleepifyTray| {
+                        tray.state = new_state;
                     })
                     .await;
             }
@@ -245,6 +304,12 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
+                    TrayCommand::ToggleNotifications => {
+                        let current = notifications_enabled.load(Ordering::Relaxed);
+                        notifications_enabled.store(!current, Ordering::Relaxed);
+                        // Trigger a redraw of the menu to update the checkmark
+                        let _ = handle.update(|_| {}).await;
+                    }
                     TrayCommand::Quit => {
                         let _ = handle.shutdown().await;
                         std::process::exit(0);

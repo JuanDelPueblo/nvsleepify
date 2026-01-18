@@ -17,3 +17,4 @@ zbus = { version = "3.14", features = ["tokio"] }
 futures-util = "0.3"
 ksni = "0.3"
 rfd = "0.14"
+notify-rust = "4.11.7"
