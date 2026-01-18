@@ -2,21 +2,6 @@
 
 `nvsleepify` is a lightweight tool written in Rust designed for Linux users who want their Nvidia dGPU to stay off. It effectively "sleeps" (powers off) and "wakes" (powers on) the GPU on demand, which is useful to prevent programs randomly waking up the dGPU wasting battery life.
 
-
-## Notes
-
--    I wrote this program for personal use on an Asus Zephyrus G14 2024 running Fedora. I cannot guarantee this program will function correctly on your system, but if you encounter any issues let me know and I can try helping fix any issues when I have time.
--    If using KDE Plasma, add these environment variables to `/etc/environment` to ensure Kwin doesn't hold the dGPU hostage if you use external displays
-
-```bash
-KWIN_DRM_DEVICES=/dev/dri/card0:/dev/dri/card1 # where the first card is the iGPU and the second card is the dGPU
-__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
-__GLX_VENDOR_LIBRARY_NAME=mesa
-VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json # different for Intel iGPUs
-```
-
--    On Fedora, you must mask `nvidia-fallback.service` using systemctl and deactivate the `nvidia-settings-user.desktop` autostart entry found in `/etc/xdg/autostart` by copying it to ~/.config/autostart/ and setting the `Hidden` field to `true`. This prevents the GPU from waking up on sleep and on initial boot up.
-
 ## Features
 
 -   **Check Status**: Quickly see if your Nvidia GPU is Active (D0), Suspended, or Powered Off (D3cold).
@@ -87,6 +72,25 @@ This command performs the shutdown sequence. If processes are found using the GP
 nvsleepify off
 ```
 This command reverses the shutdown sequence, powering on the slot, rescanning the bus, and reloading drivers.
+
+## Notes
+
+-    I wrote this program for personal use on an Asus Zephyrus G14 2024 running Fedora. I cannot guarantee this program will function correctly on your system, but if you encounter any issues let me know and I can try helping fix any issues when I have time.
+-    If using KDE Plasma, add these environment variables to `/etc/environment` to ensure Kwin doesn't hold the dGPU hostage if you use external displays
+
+```bash
+KWIN_DRM_DEVICES=/dev/dri/card0:/dev/dri/card1 # where the first card is the iGPU and the second card is the dGPU
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+__GLX_VENDOR_LIBRARY_NAME=mesa
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json # different for Intel iGPUs
+```
+-    At least on my laptop, with the above environment variables KDE Powerdevil will hang and crash if you don't disable DDC in `~/.config/powerdevilrc` by adding
+
+```
+[Backlight]
+EnableDDC=false
+```
+-    On Fedora, you must mask `nvidia-fallback.service` using systemctl and deactivate the `nvidia-settings-user.desktop` autostart entry found in `/etc/xdg/autostart` by copying it to ~/.config/autostart/ and setting the `Hidden` field to `true`. This prevents the GPU from waking up on sleep and on initial boot up.
 
 ## References used
 
