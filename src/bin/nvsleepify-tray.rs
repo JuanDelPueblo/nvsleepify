@@ -71,7 +71,7 @@ impl NvSleepifyTray {
             "Enabled: {}",
             if state.enabled { "yes" } else { "no" }
         ));
-        if !state.power_state.is_empty() {
+        if !state.power_state.is_empty() || state.power_state != "NotFound" {
             lines.push(format!("Power: {}", state.power_state));
         }
         if !state.processes.is_empty() {
