@@ -17,6 +17,7 @@
     -   Reloads kernel modules.
     -   Restarts Nvidia services.
 -   **Systemd Service**: Restores the last saved nvsleepify mode on boot or resume.
+-   **Tray Applet**: View GPU status and sleep/wake your GPU from within your DE's system tray.
 
 ## Prerequisites
 
@@ -55,19 +56,25 @@ To use this tool you must enable the `nvsleepifyd` service as follows:
 sudo systemctl enable --now nvsleepifyd.service
 ```
 
-### Check Status
+### Tray Applet
+
+This project comes with a tray applet called `nvsleepify-tray` which lets you control your GPU from within your DE's system tray. It comes with 3 icons for each state (active, suspended, off), a right click menu with a toggle for nvsleepify, and notifications for when the GPU changes state.
+
+### CLI commands
+
+#### Check Status
 ```bash
 nvsleepify status
 ```
 Displays the current PCI address, power state (D0/D3cold), and lists any device nodes or blocking processes.
 
-### Sleep GPU (Turn Off)
+#### Sleep GPU (Turn Off)
 ```bash
 nvsleepify on
 ```
 This command performs the shutdown sequence. If processes are found using the GPU, it will prompt you interactively to kill them or abort.
 
-### Wake GPU (Turn On)
+#### Wake GPU (Turn On)
 ```bash
 nvsleepify off
 ```
