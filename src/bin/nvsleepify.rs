@@ -22,6 +22,8 @@ enum Commands {
     },
     /// Enable (Wake) the Nvidia GPU
     Off,
+    /// Automatically manage GPU power based on charging state
+    Auto,
 }
 
 #[tokio::main]
@@ -42,6 +44,7 @@ async fn main() -> Result<()> {
         Commands::Status => Command::Status,
         Commands::On { force } => Command::Sleep { kill_procs: force },
         Commands::Off => Command::Wake,
+        Commands::Auto => Command::Auto,
     };
 
     client::run(cmd).await

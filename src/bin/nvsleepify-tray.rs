@@ -13,14 +13,16 @@ use zbus::{dbus_proxy, Connection};
 )]
 trait NvSleepifyManager {
     fn status(&self) -> zbus::Result<String>;
-    fn info(&self) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
+    fn info(&self) -> zbus::Result<(bool, bool, String, Vec<(String, String)>)>;
     fn sleep(&self, kill_procs: bool) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
     fn wake(&self) -> zbus::Result<(bool, String)>;
+    fn set_auto(&self, enable: bool) -> zbus::Result<String>;
 }
 
 #[derive(Debug, Clone, Copy)]
 enum TrayCommand {
     Toggle,
+    ToggleAuto,
     ToggleNotifications,
     Quit,
 }
@@ -28,6 +30,7 @@ enum TrayCommand {
 #[derive(Debug, Default, Clone)]
 struct UiState {
     enabled: bool,
+    auto_enabled: bool,
     power_state: String,
     processes: Vec<(String, String)>,
     last_error: Option<String>,
@@ -75,6 +78,10 @@ impl NvSleepifyTray {
         lines.push(format!(
             "Enabled: {}",
             if state.enabled { "yes" } else { "no" }
+        ));
+        lines.push(format!(
+            "Auto Mode: {}",
+            if state.auto_enabled { "on" } else { "off" }
         ));
         if !state.power_state.is_empty() || state.power_state != "NotFound" {
             lines.push(format!("Power: {}", state.power_state));
@@ -145,6 +152,18 @@ impl ksni::Tray for NvSleepifyTray {
             }
             .into(),
             CheckmarkItem {
+                label: "Auto Mode".into(),
+                checked: self.state.auto_enabled,
+                activate: {
+                    let tx = self.tx.clone();
+                    Box::new(move |_| {
+                        let _ = tx.send(TrayCommand::ToggleAuto);
+                    })
+                },
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
                 label: "Notifications".into(),
                 checked: self.notifications_enabled.load(Ordering::Relaxed),
                 activate: {
@@ -202,8 +221,9 @@ fn is_gpu_driver_loaded() -> bool {
 
 async fn fetch_info(proxy: &NvSleepifyManagerProxy<'_>) -> UiState {
     match proxy.info().await {
-        Ok((enabled, power_state, processes)) => UiState {
+        Ok((enabled, auto_enabled, power_state, processes)) => UiState {
             enabled,
+            auto_enabled,
             power_state,
             processes,
             last_error: None,
@@ -309,6 +329,24 @@ async fn main() -> Result<()> {
                         notifications_enabled.store(!current, Ordering::Relaxed);
                         // Trigger a redraw of the menu to update the checkmark
                         let _ = handle.update(|_| {}).await;
+                    }
+                    TrayCommand::ToggleAuto => {
+                        let current = fetch_info(&proxy).await;
+                        // Toggle logic
+                        if let Err(e) = proxy.set_auto(!current.auto_enabled).await {
+                            let _ = handle
+                                .update(|tray: &mut NvSleepifyTray| {
+                                    tray.state.last_error = Some(format!("Set Auto failed: {}", e));
+                                })
+                                .await;
+                        }
+                        // Refresh
+                        let refreshed = fetch_info(&proxy).await;
+                        let _ = handle
+                            .update(|tray: &mut NvSleepifyTray| {
+                                tray.state = refreshed;
+                            })
+                            .await;
                     }
                     TrayCommand::Quit => {
                         let _ = handle.shutdown().await;

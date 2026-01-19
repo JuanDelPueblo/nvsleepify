@@ -152,3 +152,18 @@ pub fn load_modules() -> Result<()> {
     }
     Ok(())
 }
+
+pub fn get_charging_status() -> bool {
+    let candidates = [
+        "/sys/class/power_supply/ACAD/online",
+        "/sys/class/power_supply/AC/online",
+        "/sys/class/power_supply/ADP1/online",
+    ];
+    for path in candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return content.trim() == "1";
+        }
+    }
+    // Fallback: If we genuinely can't tell, assume charging to be safe (never sleep unwantedly)
+    true
+}

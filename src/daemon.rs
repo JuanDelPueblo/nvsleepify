@@ -7,6 +7,7 @@ use tokio::task::spawn_blocking;
 use zbus::{dbus_interface, ConnectionBuilder};
 
 const STATE_FILE: &str = "/var/lib/nvsleepify/state";
+const AUTO_FILE: &str = "/var/lib/nvsleepify/auto";
 
 struct NvSleepifyManager;
 
@@ -19,16 +20,23 @@ impl NvSleepifyManager {
     }
 
     /// Read-only info for UIs.
-    /// Returns: (sleep_enabled, power_state, blocking_processes)
-    async fn info(&self) -> (bool, String, Vec<(String, String)>) {
+    /// Returns: (sleep_enabled, auto_enabled, power_state, blocking_processes)
+    async fn info(&self) -> (bool, bool, String, Vec<(String, String)>) {
         spawn_blocking(move || info_logic())
             .await
-            .unwrap_or_else(|e| (false, format!("Internal error: {}", e), vec![]))
+            .unwrap_or_else(|e| (false, false, format!("Internal error: {}", e), vec![]))
     }
 
     /// Sleep the GPU.
     /// Returns: (success, message, blocking_processes)
     async fn sleep(&self, kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
+        // Disabling auto mode when manual command is issued is a good UX pattern,
+        // but the user didn't explicitly ask for it. However, if I manually sleep,
+        // and auto mode thinks I should be awake (plugged in), it will just wake me up again in 5s.
+        // User asked: "wait 5 seconds after any charging changes before turning on/off the gpu"
+        // It implies auto mode reacts to charging changes.
+        // If I manually sleep while plugged in and auto is on, auto loop detects "Charging" + "Sleep Enabled" -> Wake.
+        // So manual commands are overridden by auto mode. This is acceptable for "Auto".
         spawn_blocking(move || sleep_logic(kill_procs))
             .await
             .unwrap_or_else(|e| (false, format!("Internal error: {}", e), vec![]))
@@ -41,12 +49,66 @@ impl NvSleepifyManager {
             .await
             .unwrap_or_else(|e| (false, format!("Internal error: {}", e)))
     }
+
+    /// Set Auto Mode
+    async fn set_auto(&self, enable: bool) -> String {
+        spawn_blocking(move || set_auto_logic(enable))
+            .await
+            .unwrap_or_else(|e| format!("Internal error: {}", e))
+    }
 }
 
 async fn monitor_loop() {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+
+    // Auto mode state
+    let mut last_charging = system::get_charging_status();
+    let mut stable_since = tokio::time::Instant::now();
+
     loop {
         interval.tick().await;
+
+        // --- Auto/Charging Logic ---
+        let auto_enabled = spawn_blocking(|| load_auto_state()).await.unwrap_or(false);
+
+        if auto_enabled {
+            let current_charging = spawn_blocking(|| system::get_charging_status())
+                .await
+                .unwrap_or(true);
+
+            if current_charging != last_charging {
+                println!(
+                    "Monitor: Power state changed to {}. Debouncing...",
+                    if current_charging {
+                        "Charging"
+                    } else {
+                        "Unplugged"
+                    }
+                );
+                last_charging = current_charging;
+                stable_since = tokio::time::Instant::now();
+            } else if stable_since.elapsed().as_secs() >= 5 {
+                // Stable for 5 seconds
+                let sleep_enabled = spawn_blocking(|| load_state()).await.unwrap_or(false);
+
+                if current_charging {
+                    // Plugged in -> Should be Awake (sleep_enabled == false)
+                    if sleep_enabled {
+                        println!("Monitor: Auto-mode enforcing WAKE (Plugged in)");
+                        let _ = spawn_blocking(|| wake_logic()).await;
+                    }
+                } else {
+                    // Unplugged -> Should be Asleep (sleep_enabled == true)
+                    if !sleep_enabled {
+                        println!("Monitor: Auto-mode enforcing SLEEP (Unplugged)");
+                        // Soft sleep
+                        let _ = spawn_blocking(|| sleep_logic(false)).await;
+                    }
+                }
+            }
+        }
+
+        // --- Existing Sleep Enforcement Logic ---
 
         let should_sleep = spawn_blocking(|| {
             if !load_state() {
@@ -128,22 +190,30 @@ fn load_state() -> bool {
     false
 }
 
-fn info_logic() -> (bool, String, Vec<(String, String)>) {
+fn info_logic() -> (bool, bool, String, Vec<(String, String)>) {
     let sleep_enabled = load_state();
+    let auto_enabled = load_auto_state();
 
     match PciDevice::find_nvidia_gpu() {
         Ok(gpu) => {
             let nodes = gpu.get_device_nodes();
             let power_state = gpu.get_power_state();
             let procs = system::get_processes_using_nvidia(&nodes).unwrap_or_default();
-            (sleep_enabled, power_state, procs)
+            (sleep_enabled, auto_enabled, power_state, procs)
         }
-        Err(_) => (sleep_enabled, "NotFound".to_string(), vec![]),
+        Err(_) => (sleep_enabled, auto_enabled, "NotFound".to_string(), vec![]),
     }
 }
 
 fn status_logic() -> String {
     let mut output = String::new();
+    let auto_enabled = load_auto_state();
+    if auto_enabled {
+        writeln!(output, "Auto Mode:   Enabled").unwrap();
+    } else {
+        writeln!(output, "Auto Mode:   Disabled").unwrap();
+    }
+
     match PciDevice::find_nvidia_gpu() {
         Ok(gpu) => {
             writeln!(output, "Nvidia GPU Found:").unwrap();
@@ -188,10 +258,6 @@ fn status_logic() -> String {
 }
 
 fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
-    if let Err(e) = save_state(true) {
-        return (false, format!("Failed to save state: {}", e), vec![]);
-    }
-
     let gpu = match PciDevice::find_nvidia_gpu() {
         Ok(g) => g,
         Err(_) => {
@@ -207,8 +273,12 @@ fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
     match system::get_processes_using_nvidia(&nodes) {
         Ok(procs) if !procs.is_empty() => {
             if !kill_procs {
+                println!("Sleep blocked by processes (soft-sleep): {:?}", procs);
                 return (false, "Blocking processes found".to_string(), procs);
             }
+            // If we are about to force kill, we should save state as 'on'
+            // so the monitor loop enforces it if we crash/fail halfway,
+            // but we can also just save it down below.
             if let Err(e) = system::kill_processes(&procs) {
                 return (false, format!("Failed to kill processes: {}", e), vec![]);
             }
@@ -217,6 +287,10 @@ fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
         }
         Err(e) => return (false, format!("Failed checking processes: {}", e), vec![]),
         _ => {}
+    }
+
+    if let Err(e) = save_state(true) {
+        return (false, format!("Failed to save state: {}", e), vec![]);
     }
 
     if let Err(e) = system::stop_services() {
@@ -283,4 +357,35 @@ fn restore_logic() -> Result<()> {
         wake_logic();
     }
     Ok(())
+}
+
+fn save_auto_state(enabled: bool) -> Result<()> {
+    let path = std::path::Path::new(AUTO_FILE);
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let content = if enabled { "true" } else { "false" };
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+fn load_auto_state() -> bool {
+    let path = std::path::Path::new(AUTO_FILE);
+    if let Ok(content) = std::fs::read_to_string(path) {
+        return content.trim() == "true";
+    }
+    false
+}
+
+fn set_auto_logic(enable: bool) -> String {
+    if let Err(e) = save_auto_state(enable) {
+        return format!("Failed to save auto state: {}", e);
+    }
+    if enable {
+        "Auto mode enabled. Monitor will manage GPU power.".to_string()
+    } else {
+        "Auto mode disabled.".to_string()
+    }
 }

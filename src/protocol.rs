@@ -5,6 +5,7 @@ pub enum Command {
     Status,
     Sleep { kill_procs: bool },
     Wake,
+    Auto,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -11,9 +11,10 @@ use zbus::{dbus_proxy, Connection};
 )]
 trait NvSleepifyManager {
     fn status(&self) -> zbus::Result<String>;
-    fn info(&self) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
+    fn info(&self) -> zbus::Result<(bool, bool, String, Vec<(String, String)>)>;
     fn sleep(&self, kill_procs: bool) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
     fn wake(&self) -> zbus::Result<(bool, String)>;
+    fn set_auto(&self, enable: bool) -> zbus::Result<String>;
 }
 
 pub async fn run(mut command: Command) -> Result<()> {
@@ -38,6 +39,19 @@ pub async fn run(mut command: Command) -> Result<()> {
                     println!("{}", "Success.".green());
                 } else {
                     println!("{}", format!("Error: {}", msg).red());
+                }
+                break;
+            }
+            Command::Auto => {
+                let (_, auto_is_on, _, _) = proxy.info().await?;
+                if auto_is_on {
+                    println!("Auto mode is currently ENABLED. Disabling...");
+                    proxy.set_auto(false).await?;
+                    println!("{}", "Auto mode disabled.".red());
+                } else {
+                    println!("Auto mode is currently DISABLED. Enabling...");
+                    proxy.set_auto(true).await?;
+                    println!("{}", "Auto mode enabled.".green());
                 }
                 break;
             }
