@@ -5,19 +5,19 @@
 ## Features
 
 -   **Check Status**: Quickly see if your Nvidia GPU is Active (D0), Suspended, or Powered Off (D3cold).
--   **Safe Disable (`on`)**:
+-   **Integrated Mode (`integrated`)**:
+    -   Forces the Nvidia dGPU off to save power.
     -   Detects and warns about processes using the GPU.
     -   Stops Nvidia systemd services (`nvidia-persistenced`, `nvidia-powerd`).
     -   Unloads kernel modules (`nvidia`, `nvidia_uvm`, `nvidia_modeset`, `nvidia_drm`).
-    -   Unbinds the PCI driver.
-    -   Cuts power to the PCI slot.
--   **Safe Enable (`off`)**:
-    -   Powers on the PCI slot.
-    -   Rescans the PCI bus to rediscover the device.
-    -   Reloads kernel modules.
-    -   Restarts Nvidia services.
+    -   Unbinds the PCI driver and cuts power to the PCI slot.
+-   **Standard Mode (`standard`)**:
+    -   Ensures the GPU is available for use.
+    -   Powers on the PCI slot, rescans the bus, reloads kernel modules, and restarts services.
+-   **Optimized Mode (`optimized`)**:
+    -   Automatically switches between Standard (when plugged in) and Integrated (on battery) modes.
 -   **Systemd Service**: Restores the last saved nvsleepify mode on boot or resume.
--   **Tray Applet**: View GPU status and sleep/wake your GPU from within your DE's system tray.
+-   **Tray Applet**: View GPU status and switch modes from within your DE's system tray.
 
 ## Prerequisites
 
@@ -58,7 +58,7 @@ sudo systemctl enable --now nvsleepifyd.service
 
 ### Tray Applet
 
-This project comes with a tray applet called `nvsleepify-tray` which lets you control your GPU from within your DE's system tray. It comes with 3 icons for each state (active, suspended, off), a right click menu with a toggle for nvsleepify, and notifications for when the GPU changes state.
+This project comes with a tray applet called `nvsleepify-tray` which lets you control your GPU from within your DE's system tray. It comes with icons for different states (active, suspended, off), a right click menu to switch between modes (Standard, Integrated, Optimized), and notifications for when the GPU changes state.
 
 ### CLI commands
 
@@ -68,17 +68,26 @@ nvsleepify status
 ```
 Displays the current PCI address, power state (D0/D3cold), and lists any device nodes or blocking processes.
 
-#### Sleep GPU (Turn Off)
-```bash
-nvsleepify on
-```
-This command performs the shutdown sequence. If processes are found using the GPU, it will prompt you interactively to kill them or abort.
+#### Set Mode
+Change the operation mode of the daemon.
 
-#### Wake GPU (Turn On)
+**Integrated (Force Off):**
 ```bash
-nvsleepify off
+nvsleepify set integrated
 ```
-This command reverses the shutdown sequence, powering on the slot, rescanning the bus, and reloading drivers.
+Forces the shutdown sequence. If processes are using the GPU, it may fail or require confirmation (if run interactively or via tray).
+
+**Standard (Always On):**
+```bash
+nvsleepify set standard
+```
+Reverses the shutdown sequence, ensuring the GPU is powered and drivers are loaded.
+
+**Optimized (Auto):**
+```bash
+nvsleepify set optimized
+```
+Enables automatic power management based on charging status (Wake on AC, Sleep on Battery).
 
 ## Notes
 

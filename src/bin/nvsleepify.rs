@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nvsleepify::{client, protocol::Command};
+use nvsleepify::{client, protocol::{Command, Mode}};
 
 #[derive(Parser)]
 #[command(name = "nvsleepify")]
@@ -14,16 +14,11 @@ struct Cli {
 enum Commands {
     /// Get GPU status
     Status,
-    /// Disable (Sleep) the Nvidia GPU
-    On {
-        /// Force kill blocking processes without confirmation
-        #[arg(short, long)]
-        force: bool,
+    /// Set power management mode
+    Set {
+        #[arg(value_enum)]
+        mode: Mode,
     },
-    /// Enable (Wake) the Nvidia GPU
-    Off,
-    /// Automatically manage GPU power based on charging state
-    Auto,
 }
 
 #[tokio::main]
@@ -42,9 +37,7 @@ async fn main() -> Result<()> {
 
     let cmd = match command_enum {
         Commands::Status => Command::Status,
-        Commands::On { force } => Command::Sleep { kill_procs: force },
-        Commands::Off => Command::Wake,
-        Commands::Auto => Command::Auto,
+        Commands::Set { mode } => Command::Set(mode),
     };
 
     client::run(cmd).await

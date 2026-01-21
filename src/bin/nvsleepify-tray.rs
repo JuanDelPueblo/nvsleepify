@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
 use ksni::TrayMethods;
 use notify_rust::Notification;
+use nvsleepify::protocol::Mode;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -13,24 +15,20 @@ use zbus::{dbus_proxy, Connection};
 )]
 trait NvSleepifyManager {
     fn status(&self) -> zbus::Result<String>;
-    fn info(&self) -> zbus::Result<(bool, bool, String, Vec<(String, String)>)>;
-    fn sleep(&self, kill_procs: bool) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
-    fn wake(&self) -> zbus::Result<(bool, String)>;
-    fn set_auto(&self, enable: bool) -> zbus::Result<String>;
+    fn info(&self) -> zbus::Result<(String, String, Vec<(String, String)>)>;
+    fn set_mode(&self, mode_str: String) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
 }
 
 #[derive(Debug, Clone, Copy)]
 enum TrayCommand {
-    Toggle,
-    ToggleAuto,
+    SetMode(Mode),
     ToggleNotifications,
     Quit,
 }
 
 #[derive(Debug, Default, Clone)]
 struct UiState {
-    enabled: bool,
-    auto_enabled: bool,
+    mode: Mode,
     power_state: String,
     processes: Vec<(String, String)>,
     last_error: Option<String>,
@@ -48,16 +46,15 @@ impl NvSleepifyTray {
         if !state.processes.is_empty() {
             return "nvsleepify-gpu-active".into();
         }
-
         if state.power_state == "D3cold" {
             return "nvsleepify-gpu-suspended".into();
         }
-
-        if state.enabled {
+        if state.power_state == "NotFound" {
             return "nvsleepify-gpu-off".into();
         }
-
-        // Idle / unknown
+        if state.mode == Mode::Integrated {
+            return "nvsleepify-gpu-off".into();
+        }
         "nvsleepify-gpu-active".into()
     }
 
@@ -66,24 +63,16 @@ impl NvSleepifyTray {
             format!("GPU Active ({} proc)", state.processes.len())
         } else if state.power_state == "D3cold" {
             "GPU Suspended (D3cold)".into()
-        } else if state.enabled {
-            "nvsleepify Enabled".into()
         } else {
-            "nvsleepify".into()
+            format!("nvsleepify ({})", state.mode)
         }
     }
 
     fn tooltip_for_state(state: &UiState) -> ksni::ToolTip {
         let mut lines = Vec::new();
-        lines.push(format!(
-            "Enabled: {}",
-            if state.enabled { "yes" } else { "no" }
-        ));
-        lines.push(format!(
-            "Auto Mode: {}",
-            if state.auto_enabled { "on" } else { "off" }
-        ));
-        if !state.power_state.is_empty() || state.power_state != "NotFound" {
+        lines.push(format!("Mode: {}", state.mode));
+
+        if !state.power_state.is_empty() && state.power_state != "NotFound" {
             lines.push(format!("Power: {}", state.power_state));
         }
         if !state.processes.is_empty() {
@@ -132,37 +121,44 @@ impl ksni::Tray for NvSleepifyTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
 
-        let toggle_label = if self.state.enabled {
-            "Disable nvsleepify (wake GPU)"
-        } else {
-            "Enable nvsleepify (sleep GPU)"
-        };
-
         vec![
-            StandardItem {
-                label: toggle_label.into(),
-                icon_name: "view-refresh".into(),
+            CheckmarkItem {
+                label: "Standard (Always On)".into(),
+                checked: self.state.mode == Mode::Standard,
                 activate: {
                     let tx = self.tx.clone();
                     Box::new(move |_| {
-                        let _ = tx.send(TrayCommand::Toggle);
+                        let _ = tx.send(TrayCommand::SetMode(Mode::Standard));
                     })
                 },
                 ..Default::default()
             }
             .into(),
             CheckmarkItem {
-                label: "Auto Mode".into(),
-                checked: self.state.auto_enabled,
+                label: "Integrated (Force Sleep)".into(),
+                checked: self.state.mode == Mode::Integrated,
                 activate: {
                     let tx = self.tx.clone();
                     Box::new(move |_| {
-                        let _ = tx.send(TrayCommand::ToggleAuto);
+                        let _ = tx.send(TrayCommand::SetMode(Mode::Integrated));
                     })
                 },
                 ..Default::default()
             }
             .into(),
+            CheckmarkItem {
+                label: "Optimized (Auto)".into(),
+                checked: self.state.mode == Mode::Optimized,
+                activate: {
+                    let tx = self.tx.clone();
+                    Box::new(move |_| {
+                        let _ = tx.send(TrayCommand::SetMode(Mode::Optimized));
+                    })
+                },
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
             CheckmarkItem {
                 label: "Notifications".into(),
                 checked: self.notifications_enabled.load(Ordering::Relaxed),
@@ -221,13 +217,15 @@ fn is_gpu_driver_loaded() -> bool {
 
 async fn fetch_info(proxy: &NvSleepifyManagerProxy<'_>) -> UiState {
     match proxy.info().await {
-        Ok((enabled, auto_enabled, power_state, processes)) => UiState {
-            enabled,
-            auto_enabled,
-            power_state,
-            processes,
-            last_error: None,
-        },
+        Ok((mode_str, power_state, processes)) => {
+            let mode = Mode::from_str(&mode_str).unwrap_or(Mode::Standard);
+            UiState {
+                mode,
+                power_state,
+                processes,
+                last_error: None,
+            }
+        }
         Err(e) => UiState {
             last_error: Some(format!(
                 "Failed to query daemon: {} (is nvsleepifyd.service running?)",
@@ -266,7 +264,7 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow!("Tray spawn failed: {e}"))?;
 
-    // Polling task to keep icon/status in sync.
+    // Polling logic
     {
         let handle = handle.clone();
         let proxy = NvSleepifyManagerProxy::new(&connection).await?;
@@ -297,11 +295,11 @@ async fn main() -> Result<()> {
                                 .show();
                         });
                     }
-                    if !last_state.enabled && new_state.enabled {
-                        tokio::task::spawn_blocking(|| {
+                    if last_state.mode != new_state.mode {
+                        tokio::task::spawn_blocking(move || {
                             let _ = Notification::new()
                                 .summary("nvsleepify")
-                                .body("nvsleepify enabled")
+                                .body(&format!("Mode changed to {}", new_state.mode))
                                 .show();
                         });
                     }
@@ -317,7 +315,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Command handler (toggle / quit)
+    // Command handler
     {
         let handle = handle.clone();
         let proxy = NvSleepifyManagerProxy::new(&connection).await?;
@@ -327,73 +325,55 @@ async fn main() -> Result<()> {
                     TrayCommand::ToggleNotifications => {
                         let current = notifications_enabled.load(Ordering::Relaxed);
                         notifications_enabled.store(!current, Ordering::Relaxed);
-                        // Trigger a redraw of the menu to update the checkmark
                         let _ = handle.update(|_| {}).await;
-                    }
-                    TrayCommand::ToggleAuto => {
-                        let current = fetch_info(&proxy).await;
-                        // Toggle logic
-                        if let Err(e) = proxy.set_auto(!current.auto_enabled).await {
-                            let _ = handle
-                                .update(|tray: &mut NvSleepifyTray| {
-                                    tray.state.last_error = Some(format!("Set Auto failed: {}", e));
-                                })
-                                .await;
-                        }
-                        // Refresh
-                        let refreshed = fetch_info(&proxy).await;
-                        let _ = handle
-                            .update(|tray: &mut NvSleepifyTray| {
-                                tray.state = refreshed;
-                            })
-                            .await;
                     }
                     TrayCommand::Quit => {
                         let _ = handle.shutdown().await;
                         std::process::exit(0);
                     }
-                    TrayCommand::Toggle => {
-                        // Read latest state
-                        let current = fetch_info(&proxy).await;
-                        if current.enabled {
-                            // Disable (wake)
-                            match proxy.wake().await {
-                                Ok((_success, _msg)) => {}
-                                Err(e) => {
-                                    let _ = handle
-                                        .update(|tray: &mut NvSleepifyTray| {
-                                            tray.state.last_error =
-                                                Some(format!("Wake failed: {}", e));
-                                        })
-                                        .await;
-                                }
-                            }
-                        } else {
-                            // Enable (sleep)
-                            if !current.processes.is_empty() {
-                                if !confirm_kill_processes(&current.processes) {
-                                    continue;
-                                }
-                            }
+                    TrayCommand::SetMode(mode) => {
+                        // Check blocking procs for Integrated or Optimized mode?
+                        // If we are setting mode to Integrated, and there are processes, we might want to warn.
+                        // But if we trust the daemon to force kill (Integrated), maybe we should warn first.
+                        // The daemon's current logic for `set_mode` Integrated is `sleep_logic(true)` which kills.
 
-                            match proxy.sleep(!current.processes.is_empty()).await {
-                                Ok((_success, _msg, _procs)) => {}
-                                Err(e) => {
-                                    let _ = handle
-                                        .update(|tray: &mut NvSleepifyTray| {
-                                            tray.state.last_error =
-                                                Some(format!("Sleep failed: {}", e));
-                                        })
-                                        .await;
-                                }
+                        let current = fetch_info(&proxy).await;
+                        if mode == Mode::Integrated && !current.processes.is_empty() {
+                            if !confirm_kill_processes(&current.processes) {
+                                continue; // User cancelled
                             }
                         }
 
-                        // Force refresh after action
+                        // What about Optimized? Daemon uses soft sleep.
+                        // If user switches to Optimized and it fails to sleep due to processes,
+                        // the daemon returns failure but stays in Optimized mode (and will retry in loop).
+                        // That seems fine.
+
+                        match proxy.set_mode(mode.to_string()).await {
+                            Ok((success, msg, _procs)) => {
+                                if !success {
+                                    let _ = handle
+                                        .update(|tray: &mut NvSleepifyTray| {
+                                            tray.state.last_error =
+                                                Some(format!("Set Mode failed: {}", msg));
+                                        })
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = handle
+                                    .update(|tray: &mut NvSleepifyTray| {
+                                        tray.state.last_error =
+                                            Some(format!("Set Mode failed: {}", e));
+                                    })
+                                    .await;
+                            }
+                        }
+
                         let refreshed = fetch_info(&proxy).await;
                         let _ = handle
                             .update(|tray: &mut NvSleepifyTray| {
-                                tray.state = refreshed.clone();
+                                tray.state = refreshed;
                             })
                             .await;
                     }

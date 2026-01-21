@@ -1,13 +1,14 @@
 use crate::pci::PciDevice;
+use crate::protocol::Mode;
 use crate::system;
 use anyhow::Result;
 
 use std::fmt::Write;
+use std::str::FromStr;
 use tokio::task::spawn_blocking;
 use zbus::{dbus_interface, ConnectionBuilder};
 
-const STATE_FILE: &str = "/var/lib/nvsleepify/state";
-const AUTO_FILE: &str = "/var/lib/nvsleepify/auto";
+const MODE_FILE: &str = "/var/lib/nvsleepify/mode";
 
 struct NvSleepifyManager;
 
@@ -20,124 +21,83 @@ impl NvSleepifyManager {
     }
 
     /// Read-only info for UIs.
-    /// Returns: (sleep_enabled, auto_enabled, power_state, blocking_processes)
-    async fn info(&self) -> (bool, bool, String, Vec<(String, String)>) {
+    /// Returns: (mode_str, power_state, blocking_processes)
+    async fn info(&self) -> (String, String, Vec<(String, String)>) {
         spawn_blocking(move || info_logic())
             .await
-            .unwrap_or_else(|e| (false, false, format!("Internal error: {}", e), vec![]))
+            .unwrap_or_else(|e| {
+                (
+                    "Unknown".to_string(),
+                    format!("Internal error: {}", e),
+                    vec![],
+                )
+            })
     }
 
-    /// Sleep the GPU.
-    /// Returns: (success, message, blocking_processes)
-    async fn sleep(&self, kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
-        // Disabling auto mode when manual command is issued is a good UX pattern,
-        // but the user didn't explicitly ask for it. However, if I manually sleep,
-        // and auto mode thinks I should be awake (plugged in), it will just wake me up again in 5s.
-        // User asked: "wait 5 seconds after any charging changes before turning on/off the gpu"
-        // It implies auto mode reacts to charging changes.
-        // If I manually sleep while plugged in and auto is on, auto loop detects "Charging" + "Sleep Enabled" -> Wake.
-        // So manual commands are overridden by auto mode. This is acceptable for "Auto".
-        spawn_blocking(move || sleep_logic(kill_procs))
+    /// Set Mode.
+    async fn set_mode(&self, mode_str: String) -> (bool, String, Vec<(String, String)>) {
+        spawn_blocking(move || set_mode_logic(&mode_str))
             .await
             .unwrap_or_else(|e| (false, format!("Internal error: {}", e), vec![]))
-    }
-
-    /// Wake the GPU.
-    /// Returns: (success, message)
-    async fn wake(&self) -> (bool, String) {
-        spawn_blocking(move || wake_logic())
-            .await
-            .unwrap_or_else(|e| (false, format!("Internal error: {}", e)))
-    }
-
-    /// Set Auto Mode
-    async fn set_auto(&self, enable: bool) -> String {
-        spawn_blocking(move || set_auto_logic(enable))
-            .await
-            .unwrap_or_else(|e| format!("Internal error: {}", e))
     }
 }
 
 async fn monitor_loop() {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
 
-    // Auto mode state
     let mut last_charging = system::get_charging_status();
     let mut stable_since = tokio::time::Instant::now();
 
     loop {
         interval.tick().await;
 
-        // --- Auto/Charging Logic ---
-        let auto_enabled = spawn_blocking(|| load_auto_state()).await.unwrap_or(false);
+        let mode = spawn_blocking(|| load_mode())
+            .await
+            .unwrap_or(Ok(Mode::Standard))
+            .unwrap_or(Mode::Standard);
 
-        if auto_enabled {
-            let current_charging = spawn_blocking(|| system::get_charging_status())
-                .await
-                .unwrap_or(true);
+        match mode {
+            Mode::Optimized => {
+                let current_charging = spawn_blocking(|| system::get_charging_status())
+                    .await
+                    .unwrap_or(true);
 
-            if current_charging != last_charging {
-                println!(
-                    "Monitor: Power state changed to {}. Debouncing...",
+                if current_charging != last_charging {
+                    println!(
+                        "Monitor: Power state changed to {}. Debouncing...",
+                        if current_charging {
+                            "Charging"
+                        } else {
+                            "Unplugged"
+                        }
+                    );
+                    last_charging = current_charging;
+                    stable_since = tokio::time::Instant::now();
+                } else if stable_since.elapsed().as_secs() >= 2 {
                     if current_charging {
-                        "Charging"
-                    } else {
-                        "Unplugged"
-                    }
-                );
-                last_charging = current_charging;
-                stable_since = tokio::time::Instant::now();
-            } else if stable_since.elapsed().as_secs() >= 5 {
-                // Stable for 5 seconds
-                let sleep_enabled = spawn_blocking(|| load_state()).await.unwrap_or(false);
-
-                if current_charging {
-                    // Plugged in -> Should be Awake (sleep_enabled == false)
-                    if sleep_enabled {
-                        println!("Monitor: Auto-mode enforcing WAKE (Plugged in)");
                         let _ = spawn_blocking(|| wake_logic()).await;
-                    }
-                } else {
-                    // Unplugged -> Should be Asleep (sleep_enabled == true)
-                    if !sleep_enabled {
-                        println!("Monitor: Auto-mode enforcing SLEEP (Unplugged)");
-                        // Soft sleep
+                    } else {
                         let _ = spawn_blocking(|| sleep_logic(false)).await;
                     }
                 }
             }
-        }
+            Mode::Integrated => {
+                let should_sleep = spawn_blocking(|| match PciDevice::find_nvidia_gpu() {
+                    Ok(gpu) => {
+                        let state = gpu.get_power_state();
+                        state == "D0" || state == "Unknown"
+                    }
+                    Err(_) => false,
+                })
+                .await
+                .unwrap_or(false);
 
-        // --- Existing Sleep Enforcement Logic ---
-
-        let should_sleep = spawn_blocking(|| {
-            if !load_state() {
-                return false;
-            }
-            // Check if GPU is present and awake
-            match PciDevice::find_nvidia_gpu() {
-                Ok(gpu) => {
-                    let state = gpu.get_power_state();
-                    // If we see D0 or Unknown, treat it as "Awake"
-                    state == "D0" || state == "Unknown"
-                }
-                Err(_) => {
-                    // Not found means it's likely powered off or safe
-                    false
+                if should_sleep {
+                    println!("Monitor: GPU detected in high power state while Integrated mode is active. Attempting to disable...");
+                    let _ = spawn_blocking(|| sleep_logic(true)).await;
                 }
             }
-        })
-        .await
-        .unwrap_or(false);
-
-        if should_sleep {
-            println!("Monitor: GPU detected in high power state while sleep is enabled. Attempting to disable...");
-            let res = spawn_blocking(|| sleep_logic(true)).await;
-            match res {
-                Ok((true, _, _)) => println!("Monitor: Successfully enforced sleep."),
-                Ok((false, msg, _)) => eprintln!("Monitor: Failed to enforce sleep: {}", msg),
-                Err(e) => eprintln!("Monitor: Internal error executing sleep logic: {}", e),
-            }
+            Mode::Standard => {}
         }
     }
 }
@@ -170,49 +130,50 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-fn save_state(sleep_enabled: bool) -> Result<()> {
-    let path = std::path::Path::new(STATE_FILE);
+fn save_mode(mode: Mode) -> Result<()> {
+    let path = std::path::Path::new(MODE_FILE);
     if let Some(parent) = path.parent() {
         if !parent.exists() {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let content = if sleep_enabled { "on" } else { "off" };
+    let content = match mode {
+        Mode::Standard => "standard",
+        Mode::Integrated => "integrated",
+        Mode::Optimized => "optimized",
+    };
     std::fs::write(path, content)?;
     Ok(())
 }
 
-fn load_state() -> bool {
-    let path = std::path::Path::new(STATE_FILE);
-    if let Ok(content) = std::fs::read_to_string(path) {
-        return content.trim() == "on";
+fn load_mode() -> Result<Mode> {
+    let path = std::path::Path::new(MODE_FILE);
+    if !path.exists() {
+        return Ok(Mode::Standard);
     }
-    false
+    let content = std::fs::read_to_string(path)?;
+    Mode::from_str(content.trim()).map_err(|e| anyhow::anyhow!(e))
 }
 
-fn info_logic() -> (bool, bool, String, Vec<(String, String)>) {
-    let sleep_enabled = load_state();
-    let auto_enabled = load_auto_state();
+fn info_logic() -> (String, String, Vec<(String, String)>) {
+    let mode = load_mode().unwrap_or(Mode::Standard);
+    let mode_str = mode.to_string();
 
     match PciDevice::find_nvidia_gpu() {
         Ok(gpu) => {
             let nodes = gpu.get_device_nodes();
             let power_state = gpu.get_power_state();
             let procs = system::get_processes_using_nvidia(&nodes).unwrap_or_default();
-            (sleep_enabled, auto_enabled, power_state, procs)
+            (mode_str, power_state, procs)
         }
-        Err(_) => (sleep_enabled, auto_enabled, "NotFound".to_string(), vec![]),
+        Err(_) => (mode_str, "NotFound".to_string(), vec![]),
     }
 }
 
 fn status_logic() -> String {
     let mut output = String::new();
-    let auto_enabled = load_auto_state();
-    if auto_enabled {
-        writeln!(output, "Auto Mode:   Enabled").unwrap();
-    } else {
-        writeln!(output, "Auto Mode:   Disabled").unwrap();
-    }
+    let mode = load_mode().unwrap_or(Mode::Standard);
+    writeln!(output, "Current Mode: {}", mode).unwrap();
 
     match PciDevice::find_nvidia_gpu() {
         Ok(gpu) => {
@@ -247,14 +208,36 @@ fn status_logic() -> String {
                 "No Nvidia GPU running on PCI bus (or currently hidden/powered off)."
             )
             .unwrap();
-            writeln!(
-                output,
-                "If you previously ran 'nvsleepify on', run 'nvsleepify off' to enable it."
-            )
-            .unwrap();
         }
     }
     output
+}
+
+fn set_mode_logic(mode_str: &str) -> (bool, String, Vec<(String, String)>) {
+    let mode = match Mode::from_str(mode_str) {
+        Ok(m) => m,
+        Err(e) => return (false, format!("Invalid mode: {}", e), vec![]),
+    };
+
+    if let Err(e) = save_mode(mode) {
+        return (false, format!("Failed to save mode: {}", e), vec![]);
+    }
+
+    match mode {
+        Mode::Standard => {
+            let (success, msg) = wake_logic();
+            (success, msg, vec![])
+        }
+        Mode::Integrated => sleep_logic(true),
+        Mode::Optimized => {
+            if system::get_charging_status() {
+                let (success, msg) = wake_logic();
+                (success, msg, vec![])
+            } else {
+                sleep_logic(false)
+            }
+        }
+    }
 }
 
 fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
@@ -276,21 +259,13 @@ fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
                 println!("Sleep blocked by processes (soft-sleep): {:?}", procs);
                 return (false, "Blocking processes found".to_string(), procs);
             }
-            // If we are about to force kill, we should save state as 'on'
-            // so the monitor loop enforces it if we crash/fail halfway,
-            // but we can also just save it down below.
             if let Err(e) = system::kill_processes(&procs) {
                 return (false, format!("Failed to kill processes: {}", e), vec![]);
             }
-            // Give time for processes to die
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         Err(e) => return (false, format!("Failed checking processes: {}", e), vec![]),
         _ => {}
-    }
-
-    if let Err(e) = save_state(true) {
-        return (false, format!("Failed to save state: {}", e), vec![]);
     }
 
     if let Err(e) = system::stop_services() {
@@ -310,10 +285,6 @@ fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
 }
 
 fn wake_logic() -> (bool, String) {
-    if let Err(e) = save_state(false) {
-        return (false, format!("Failed to save state: {}", e));
-    }
-
     use std::fs;
     let slots_dir = std::path::Path::new("/sys/bus/pci/slots");
     if slots_dir.exists() {
@@ -345,47 +316,21 @@ fn wake_logic() -> (bool, String) {
 }
 
 fn restore_logic() -> Result<()> {
-    let path = std::path::Path::new(STATE_FILE);
-    if !path.exists() {
-        return Ok::<(), anyhow::Error>(());
-    }
-    let content = std::fs::read_to_string(path)?.trim().to_string();
-
-    if content == "on" {
-        sleep_logic(true); // Force sleep
-    } else {
-        wake_logic();
-    }
-    Ok(())
-}
-
-fn save_auto_state(enabled: bool) -> Result<()> {
-    let path = std::path::Path::new(AUTO_FILE);
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)?;
+    let mode = load_mode().unwrap_or(Mode::Standard);
+    match mode {
+        Mode::Standard => {
+            wake_logic();
+        }
+        Mode::Integrated => {
+            sleep_logic(true);
+        }
+        Mode::Optimized => {
+            if system::get_charging_status() {
+                wake_logic();
+            } else {
+                sleep_logic(false);
+            }
         }
     }
-    let content = if enabled { "true" } else { "false" };
-    std::fs::write(path, content)?;
     Ok(())
-}
-
-fn load_auto_state() -> bool {
-    let path = std::path::Path::new(AUTO_FILE);
-    if let Ok(content) = std::fs::read_to_string(path) {
-        return content.trim() == "true";
-    }
-    false
-}
-
-fn set_auto_logic(enable: bool) -> String {
-    if let Err(e) = save_auto_state(enable) {
-        return format!("Failed to save auto state: {}", e);
-    }
-    if enable {
-        "Auto mode enabled. Monitor will manage GPU power.".to_string()
-    } else {
-        "Auto mode disabled.".to_string()
-    }
 }
