@@ -1,6 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nvsleepify::{client, protocol::{Command, Mode}};
+use nvsleepify::{
+    client,
+    protocol::{Command, Mode},
+};
 
 #[derive(Parser)]
 #[command(name = "nvsleepify")]
@@ -18,6 +21,9 @@ enum Commands {
     Set {
         #[arg(value_enum)]
         mode: Mode,
+        /// Show GUI confirmation dialog if processes need to be killed
+        #[arg(long)]
+        gui: bool,
     },
 }
 
@@ -35,10 +41,10 @@ async fn main() -> Result<()> {
         }
     };
 
-    let cmd = match command_enum {
-        Commands::Status => Command::Status,
-        Commands::Set { mode } => Command::Set(mode),
+    let (cmd, gui) = match command_enum {
+        Commands::Status => (Command::Status, false),
+        Commands::Set { mode, gui } => (Command::Set(mode), gui),
     };
 
-    client::run(cmd).await
+    client::run(cmd, gui).await
 }
