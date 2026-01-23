@@ -39,6 +39,7 @@ git clone https://github.com/JuanDelPueblo/nvsleepify.git
 cd nvsleepify
 
 # Build and Install
+make
 sudo make install
 ```
 
