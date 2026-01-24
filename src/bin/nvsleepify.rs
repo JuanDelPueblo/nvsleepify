@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use nvsleepify::{
     client,
     protocol::{Command, Mode},
@@ -30,6 +31,11 @@ enum Commands {
         /// Delay in seconds
         seconds: u32,
     },
+    /// Generate shell completions
+    Completion {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[tokio::main]
@@ -50,6 +56,16 @@ async fn main() -> Result<()> {
         Commands::Status => (Command::Status, false),
         Commands::Set { mode, gui } => (Command::Set(mode), gui),
         Commands::Delay { seconds } => (Command::Delay(seconds), false),
+        Commands::Completion { shell } => {
+            use clap::CommandFactory;
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "nvsleepify",
+                &mut std::io::stdout(),
+            );
+            return Ok(());
+        }
     };
 
     client::run(cmd, gui).await
