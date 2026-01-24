@@ -117,7 +117,10 @@ pub async fn run() -> Result<()> {
 
     // Restore state on startup
     println!("Restoring previous state...");
-    let delay = spawn_blocking(|| load_delay()).await.unwrap_or(Ok(0)).unwrap_or(0);
+    let delay = spawn_blocking(|| load_delay())
+        .await
+        .unwrap_or(Ok(0))
+        .unwrap_or(0);
     if delay > 0 {
         println!("Waiting {} seconds before restoring state...", delay);
         tokio::time::sleep(tokio::time::Duration::from_secs(delay as u64)).await;
@@ -188,7 +191,10 @@ fn load_delay() -> Result<u32> {
         return Ok(0);
     }
     let content = std::fs::read_to_string(path)?;
-    content.trim().parse::<u32>().map_err(|e| anyhow::anyhow!(e))
+    content
+        .trim()
+        .parse::<u32>()
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 fn info_logic() -> (String, String, Vec<(String, String)>) {
