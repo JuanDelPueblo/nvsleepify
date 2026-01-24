@@ -25,6 +25,11 @@ enum Commands {
         #[arg(long)]
         gui: bool,
     },
+    /// Set delay before restoring GPU state on boot
+    Delay {
+        /// Delay in seconds
+        seconds: u32,
+    },
 }
 
 #[tokio::main]
@@ -44,6 +49,7 @@ async fn main() -> Result<()> {
     let (cmd, gui) = match command_enum {
         Commands::Status => (Command::Status, false),
         Commands::Set { mode, gui } => (Command::Set(mode), gui),
+        Commands::Delay { seconds } => (Command::Delay(seconds), false),
     };
 
     client::run(cmd, gui).await

@@ -36,6 +36,7 @@ impl std::str::FromStr for Mode {
 pub enum Command {
     Status,
     Set(Mode),
+    Delay(u32),
 }
 
 #[derive(Serialize, Deserialize, Debug)]

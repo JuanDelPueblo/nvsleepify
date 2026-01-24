@@ -12,6 +12,7 @@ trait NvSleepifyManager {
     fn status(&self) -> zbus::Result<String>;
     fn info(&self) -> zbus::Result<(String, String, Vec<(String, String)>)>;
     fn set_mode(&self, mode_str: String) -> zbus::Result<(bool, String, Vec<(String, String)>)>;
+    fn set_restore_delay(&self, seconds: u32) -> zbus::Result<String>;
 }
 
 fn confirm_kill_processes(procs: &[(String, String)]) -> bool {
@@ -96,6 +97,10 @@ pub async fn run(command: Command, use_gui: bool) -> Result<()> {
                 }
                 println!("{}", format!("Error: {}", msg).red());
             }
+        }
+        Command::Delay(seconds) => {
+            let msg = proxy.set_restore_delay(seconds).await?;
+            println!("{}", msg);
         }
     }
     Ok(())
