@@ -2,6 +2,28 @@ use anyhow::{anyhow, Context, Result};
 use colored::*;
 use std::process::Command;
 
+pub fn is_user_logged_in() -> bool {
+    // Check if any user has a session using loginctl
+    if let Ok(output) = Command::new("loginctl")
+        .arg("list-users")
+        .arg("--no-legend")
+        .output()
+    {
+        if !output.stdout.is_empty() {
+            return true;
+        }
+    }
+
+    // Fallback: check /run/user for any active user runtime directories
+    if let Ok(entries) = std::fs::read_dir("/run/user") {
+        if entries.count() > 0 {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn get_processes_using_nvidia(extra_paths: &[String]) -> Result<Vec<(String, String)>> {
     // Basic nvidia paths that are always relevant
     // We will use sh to run lsof with glob pattern for /dev/nvidia*

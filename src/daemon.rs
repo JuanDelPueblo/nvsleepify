@@ -115,6 +115,19 @@ async fn monitor_loop() {
 pub async fn run() -> Result<()> {
     println!("Starting NvSleepify D-Bus daemon...");
 
+    // Wait for user login
+    println!("Waiting for user login...");
+    loop {
+        let logged_in = spawn_blocking(|| system::is_user_logged_in())
+            .await
+            .unwrap_or(false);
+        if logged_in {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+    println!("User logged in detected.");
+
     // Restore state on startup
     println!("Restoring previous state...");
     let delay = spawn_blocking(|| load_delay())
