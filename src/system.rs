@@ -3,21 +3,37 @@ use colored::*;
 use std::process::Command;
 
 pub fn is_user_logged_in() -> bool {
-    // Check if any user has a session using loginctl
+    // Check if any user with UID >= 1000 has a session using loginctl
     if let Ok(output) = Command::new("loginctl")
         .arg("list-users")
         .arg("--no-legend")
         .output()
     {
-        if !output.stdout.is_empty() {
-            return true;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            // Output format: " UID USER"
+            if let Some(uid_str) = parts.get(0) {
+                if let Ok(uid) = uid_str.parse::<u32>() {
+                    // Filter out system users (typically UID < 1000)
+                    if uid >= 1000 && uid < 65534 {
+                        return true;
+                    }
+                }
+            }
         }
     }
 
-    // Fallback: check /run/user for any active user runtime directories
+    // Fallback: check /run/user for any active user runtime directories with UID >= 1000
     if let Ok(entries) = std::fs::read_dir("/run/user") {
-        if entries.count() > 0 {
-            return true;
+        for entry in entries.flatten() {
+            if let Ok(file_name) = entry.file_name().into_string() {
+                if let Ok(uid) = file_name.parse::<u32>() {
+                    if uid >= 1000 && uid < 65534 {
+                        return true;
+                    }
+                }
+            }
         }
     }
 
