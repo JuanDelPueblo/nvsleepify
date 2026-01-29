@@ -26,6 +26,7 @@
 -   **Dependencies**:
     -   `lsof` (for detecting processes using the GPU).
     -   `systemd` (for managing services).
+    -   `rust` and `cargo` (to compile app).
 
 ## Installation
 
