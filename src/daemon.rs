@@ -85,7 +85,21 @@ async fn monitor_loop() {
                     stable_since = tokio::time::Instant::now();
                 } else if stable_since.elapsed().as_secs() >= 2 {
                     if current_charging {
-                        let _ = spawn_blocking(|| wake_logic()).await;
+                        let already_active = spawn_blocking(|| {
+                            if PciDevice::find_nvidia_gpu().is_ok() {
+                                // Check if nvidia module is loaded
+                                if let Ok(content) = std::fs::read_to_string("/proc/modules") {
+                                    return content.contains("nvidia ");
+                                }
+                            }
+                            false
+                        })
+                        .await
+                        .unwrap_or(false);
+
+                        if !already_active {
+                            let _ = spawn_blocking(|| wake_logic()).await;
+                        }
                     } else {
                         let _ = spawn_blocking(|| sleep_logic(false)).await;
                     }
