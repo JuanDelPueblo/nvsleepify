@@ -66,7 +66,10 @@ pub fn get_processes_using_nvidia(extra_paths: &[String]) -> Result<Vec<(String,
         if parts.len() >= 2 {
             let name = parts[0];
             // Ignore nvidia-powerd (shows as nvidia-po) as it's a service we stop gracefully
-            if name.starts_with("nvidia-po") || name.starts_with("nvidia-pe") {
+            if name.starts_with("nvidia-po")
+                || name.starts_with("nvidia-pe")
+                || name.starts_with("gnome-shell")
+            {
                 continue;
             }
             procs.push((name.to_string(), parts[1].to_string()));
