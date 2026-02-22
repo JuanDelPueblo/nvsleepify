@@ -55,6 +55,9 @@ impl NvSleepifyTray {
         if state.mode == Mode::Integrated {
             return "nvsleepify-gpu-off".into();
         }
+        if state.mode == Mode::Vfio {
+             return "nvsleepify-gpu-suspended".into();
+        }
         "nvsleepify-gpu-active".into()
     }
 
@@ -141,6 +144,18 @@ impl ksni::Tray for NvSleepifyTray {
                     let tx = self.tx.clone();
                     Box::new(move |_| {
                         let _ = tx.send(TrayCommand::SetMode(Mode::Integrated));
+                    })
+                },
+                ..Default::default()
+            }
+            .into(),
+             CheckmarkItem {
+                label: "VFIO (Passthrough)".into(),
+                checked: self.state.mode == Mode::Vfio,
+                activate: {
+                    let tx = self.tx.clone();
+                    Box::new(move |_| {
+                        let _ = tx.send(TrayCommand::SetMode(Mode::Vfio));
                     })
                 },
                 ..Default::default()

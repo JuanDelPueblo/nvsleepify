@@ -135,6 +135,57 @@ impl PciDevice {
         Err(anyhow!("No Nvidia GPU found on PCI bus"))
     }
 
+    pub fn find_related_audio_device(&self) -> Option<Self> {
+        let pci_root = Path::new("/sys/bus/pci/devices");
+        if let Ok(entries) = fs::read_dir(pci_root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let addr_str_os = path.file_name()?;
+                let addr_str = addr_str_os.to_string_lossy();
+
+                // address format: DDDD:BB:DD.F (len >= 12 usually)
+                if addr_str.len() > 2 && self.address.len() > 2 {
+                    // Check if it shares the same domain:bus:slot prefix
+                    // e.g. "0000:01:00.0" -> "0000:01:00"
+                    let gpu_slot_prefix = &self.address[..self.address.len() - 2];
+                    let current_prefix = &addr_str[..addr_str.len() - 2];
+
+                    if gpu_slot_prefix == current_prefix && addr_str != self.address {
+                        // Check if it is an audio device (0x0403)
+                        if let Ok(content) = fs::read_to_string(path.join("class")) {
+                            if content.starts_with("0x0403") {
+                                return Some(PciDevice::new(&addr_str));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn get_vendor_id(&self) -> Result<String> {
+        let path = self.path.join("vendor");
+        let content = fs::read_to_string(path)?;
+        Ok(content.trim().trim_start_matches("0x").to_string())
+    }
+
+    pub fn get_device_id(&self) -> Result<String> {
+        let path = self.path.join("device");
+        let content = fs::read_to_string(path)?;
+        Ok(content.trim().trim_start_matches("0x").to_string())
+    }
+
+    pub fn bind_driver(&self, driver: &str) -> Result<()> {
+        let driver_path = Path::new("/sys/bus/pci/drivers").join(driver);
+        if !driver_path.exists() {
+            return Err(anyhow!("Driver {} not found", driver));
+        }
+        let bind_path = driver_path.join("bind");
+        fs::write(bind_path, &self.address)?;
+        Ok(())
+    }
+
     pub fn get_power_state(&self) -> String {
         let path = self.path.join("power_state");
         fs::read_to_string(path)

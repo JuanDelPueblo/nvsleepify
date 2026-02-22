@@ -176,6 +176,49 @@ pub fn unload_modules() -> Result<()> {
     Ok(())
 }
 
+pub fn unload_vfio_modules() -> Result<()> {
+    println!("{}", "Unloading VFIO modules...".blue());
+    let _status = Command::new("modprobe")
+        .arg("-r")
+        .arg("vfio_pci")
+        .arg("vfio_pci_core")
+        .arg("vfio_iommu_type1")
+        .arg("vfio")
+        .status()?;
+
+    // It's okay if they weren't loaded
+    Ok(())
+}
+
+pub fn load_vfio_modules(ids: Option<&str>) -> Result<()> {
+    println!("{}", "Loading VFIO modules...".blue());
+
+    // modprobe vfio_pci ids=...
+    let mut args = vec!["vfio_pci"];
+    let ids_arg;
+    if let Some(ids_str) = ids {
+        ids_arg = format!("ids={}", ids_str);
+        args.push(&ids_arg);
+    }
+
+    // We execute this first to register IDs
+    let status = Command::new("modprobe").args(&args).status()?;
+    if !status.success() {
+        return Err(anyhow!("Failed to load vfio_pci"));
+    }
+
+    let status = Command::new("modprobe")
+        .arg("vfio_pci_core")
+        .arg("vfio_iommu_type1")
+        .arg("vfio")
+        .status()?;
+
+    if !status.success() {
+        // warning, maybe they are already loaded as dependency
+    }
+    Ok(())
+}
+
 pub fn load_modules() -> Result<()> {
     println!("{}", "Loading kernel modules...".blue());
     let status = Command::new("modprobe")

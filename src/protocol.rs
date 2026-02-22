@@ -7,6 +7,7 @@ pub enum Mode {
     Standard, // nvsleepify off (GPU awake)
     Integrated, // nvsleepify on (GPU asleep)
     Optimized,  // nvsleepify auto
+    Vfio,       // GPU bound to vfio-pci
 }
 
 impl std::fmt::Display for Mode {
@@ -15,6 +16,7 @@ impl std::fmt::Display for Mode {
             Mode::Standard => write!(f, "Standard"),
             Mode::Integrated => write!(f, "Integrated"),
             Mode::Optimized => write!(f, "Optimized"),
+            Mode::Vfio => write!(f, "Vfio"),
         }
     }
 }
@@ -27,6 +29,7 @@ impl std::str::FromStr for Mode {
             "standard" | "std" | "off" => Ok(Mode::Standard),
             "integrated" | "int" | "on" => Ok(Mode::Integrated),
             "optimized" | "opt" | "auto" => Ok(Mode::Optimized),
+            "vfio" => Ok(Mode::Vfio),
             _ => Err(format!("Unknown mode: {}", s)),
         }
     }

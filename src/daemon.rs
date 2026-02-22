@@ -122,6 +122,7 @@ async fn monitor_loop() {
                 }
             }
             Mode::Standard => {}
+            Mode::Vfio => {}
         }
     }
 }
@@ -187,6 +188,7 @@ fn save_mode(mode: Mode) -> Result<()> {
         Mode::Standard => "standard",
         Mode::Integrated => "integrated",
         Mode::Optimized => "optimized",
+        Mode::Vfio => "vfio",
     };
     std::fs::write(path, content)?;
     Ok(())
@@ -292,12 +294,18 @@ fn set_mode_logic(mode_str: &str) -> (bool, String, Vec<(String, String)>) {
         return (false, format!("Failed to save mode: {}", e), vec![]);
     }
 
+    // Attempt to unload VFIO modules when switching to any mode other than VFIO
+    if mode != Mode::Vfio {
+        let _ = system::unload_vfio_modules();
+    }
+
     match mode {
         Mode::Standard => {
             let (success, msg) = wake_logic();
             (success, msg, vec![])
         }
         Mode::Integrated => sleep_logic(true),
+        Mode::Vfio => setup_vfio_logic(),
         Mode::Optimized => {
             if system::get_charging_status() {
                 let (success, msg) = wake_logic();
@@ -307,6 +315,84 @@ fn set_mode_logic(mode_str: &str) -> (bool, String, Vec<(String, String)>) {
             }
         }
     }
+}
+
+fn setup_vfio_logic() -> (bool, String, Vec<(String, String)>) {
+    // 1. Ensure GPU is powered on (to read IDs)
+    // Like wake_logic but without loading nvidia modules
+    use std::fs;
+    let slots_dir = std::path::Path::new("/sys/bus/pci/slots");
+    if slots_dir.exists() {
+        if let Ok(entries) = fs::read_dir(slots_dir) {
+            for entry in entries.flatten() {
+                let power_path = entry.path().join("power");
+                if power_path.exists() {
+                    let content = fs::read_to_string(&power_path).unwrap_or_default();
+                    if content.trim() == "0" {
+                        let _ = fs::write(&power_path, "1");
+                    }
+                }
+            }
+        }
+    }
+    let _ = PciDevice::rescan();
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // 2. Find GPU and Audio to get IDs
+    let gpu = match PciDevice::find_nvidia_gpu() {
+        Ok(g) => g,
+        Err(_) => return (false, "GPU not found even after power on".to_string(), vec![]),
+    };
+    
+    // 3. Kill processes using GPU (if any, e.g. from Standard mode)
+    let nodes = gpu.get_device_nodes();
+    if let Ok(procs) = system::get_processes_using_nvidia(&nodes) {
+        if !procs.is_empty() {
+             if let Err(e) = system::kill_processes(&procs) {
+                return (false, format!("Failed to kill processes: {}", e), vec![]);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+
+    // 4. Stop Nvidia Services & Unload Nvidia Modules
+    if let Err(e) = system::stop_services() {
+        return (false, format!("Failed to stop services: {}", e), vec![]);
+    }
+    if let Err(e) = system::unload_modules() {
+        return (false, format!("Failed to unload modules: {}", e), vec![]);
+    }
+    // Unbind driver if still attached
+    let _ = gpu.unbind_driver();
+    
+    // Get IDs
+    let vendor = gpu.get_vendor_id().unwrap_or_default();
+    let device = gpu.get_device_id().unwrap_or_default();
+    let mut ids_str = format!("{}:{}", vendor, device);
+    
+    if let Some(audio) = gpu.find_related_audio_device() {
+        let _ = audio.unbind_driver();
+        let a_vendor = audio.get_vendor_id().unwrap_or_default();
+        let a_device = audio.get_device_id().unwrap_or_default();
+        if !a_vendor.is_empty() && !a_device.is_empty() {
+            ids_str.push_str(&format!(",{}:{}", a_vendor, a_device));
+        }
+    }
+
+    // 5. Load VFIO modules with IDs
+    if let Err(e) = system::load_vfio_modules(Some(&ids_str)) {
+        return (false, format!("Failed to load VFIO modules: {}", e), vec![]);
+    }
+    
+    // 6. Bind to VFIO explicitly if not picked up?
+    // Usually modprobe with ids does it if device is unbound.
+    // We can try to bind manually just in case.
+    let _ = gpu.bind_driver("vfio-pci");
+    if let Some(audio) = gpu.find_related_audio_device() {
+        let _ = audio.bind_driver("vfio-pci");
+    }
+
+    (true, format!("Switched to VFIO mode with IDs: {}", ids_str), vec![])
 }
 
 fn sleep_logic(kill_procs: bool) -> (bool, String, Vec<(String, String)>) {
@@ -386,12 +472,21 @@ fn wake_logic() -> (bool, String) {
 
 fn restore_logic() -> Result<()> {
     let mode = load_mode().unwrap_or(Mode::Standard);
+    
+    // Ensure cleanup of VFIO if not in VFIO mode
+    if mode != Mode::Vfio {
+        let _ = system::unload_vfio_modules();
+    }
+
     match mode {
         Mode::Standard => {
             wake_logic();
         }
         Mode::Integrated => {
             sleep_logic(true);
+        }
+        Mode::Vfio => {
+            setup_vfio_logic();
         }
         Mode::Optimized => {
             if system::get_charging_status() {

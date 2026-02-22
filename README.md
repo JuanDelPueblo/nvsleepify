@@ -16,6 +16,8 @@
     -   Powers on the PCI slot, rescans the bus, reloads kernel modules, and restarts services.
 -   **Optimized Mode (`optimized`)**:
     -   Automatically switches between Standard (when plugged in) and Integrated (on battery) modes.
+-   **VFIO Mode (`vfio`)**:
+    -   Binds GPU to the VFIO driver for passing thru the dGPU to a virtual machine.
 -   **Systemd Service**: Restores the last saved nvsleepify mode on boot or resume.
 -   **Tray Applet**: View GPU status and switch modes from within your DE's system tray.
 
@@ -90,6 +92,12 @@ Reverses the shutdown sequence, ensuring the GPU is powered and drivers are load
 nvsleepify set optimized
 ```
 Enables automatic power management based on charging status (Wake on AC, Sleep on Battery).
+
+**VFIO (Passthrough):**
+```bash
+nvsleepify set vfio
+```
+Binds the GPU to VFIO modules, allowing a properly configured virtual machine to directly access the GPU.
 
 ## Notes
 
