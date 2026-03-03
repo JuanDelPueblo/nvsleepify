@@ -56,7 +56,7 @@ impl NvSleepifyTray {
             return "nvsleepify-gpu-off".into();
         }
         if state.mode == Mode::Vfio {
-             return "nvsleepify-gpu-suspended".into();
+            return "nvsleepify-gpu-suspended".into();
         }
         "nvsleepify-gpu-active".into()
     }
