@@ -125,52 +125,41 @@ impl ksni::Tray for NvSleepifyTray {
         use ksni::menu::*;
 
         vec![
-            CheckmarkItem {
-                label: "Standard (Always On)".into(),
-                checked: self.state.mode == Mode::Standard,
-                activate: {
-                    let tx = self.tx.clone();
-                    Box::new(move |_| {
-                        let _ = tx.send(TrayCommand::SetMode(Mode::Standard));
-                    })
+            RadioGroup {
+                selected: match self.state.mode {
+                    Mode::Standard => 0,
+                    Mode::Integrated => 1,
+                    Mode::Vfio => 2,
+                    Mode::Optimized => 3,
                 },
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: "Integrated (Force Sleep)".into(),
-                checked: self.state.mode == Mode::Integrated,
-                activate: {
-                    let tx = self.tx.clone();
-                    Box::new(move |_| {
-                        let _ = tx.send(TrayCommand::SetMode(Mode::Integrated));
-                    })
-                },
-                ..Default::default()
-            }
-            .into(),
-             CheckmarkItem {
-                label: "VFIO (Passthrough)".into(),
-                checked: self.state.mode == Mode::Vfio,
-                activate: {
-                    let tx = self.tx.clone();
-                    Box::new(move |_| {
-                        let _ = tx.send(TrayCommand::SetMode(Mode::Vfio));
-                    })
-                },
-                ..Default::default()
-            }
-            .into(),
-            CheckmarkItem {
-                label: "Optimized (Auto)".into(),
-                checked: self.state.mode == Mode::Optimized,
-                activate: {
-                    let tx = self.tx.clone();
-                    Box::new(move |_| {
-                        let _ = tx.send(TrayCommand::SetMode(Mode::Optimized));
-                    })
-                },
-                ..Default::default()
+                select: Box::new(|this: &mut Self, idx| {
+                    let mode = match idx {
+                        0 => Mode::Standard,
+                        1 => Mode::Integrated,
+                        2 => Mode::Vfio,
+                        3 => Mode::Optimized,
+                        _ => return,
+                    };
+                    let _ = this.tx.send(TrayCommand::SetMode(mode));
+                }),
+                options: vec![
+                    RadioItem {
+                        label: "Standard (Always On)".into(),
+                        ..Default::default()
+                    },
+                    RadioItem {
+                        label: "Integrated (Force Sleep)".into(),
+                        ..Default::default()
+                    },
+                    RadioItem {
+                        label: "VFIO (Passthrough)".into(),
+                        ..Default::default()
+                    },
+                    RadioItem {
+                        label: "Optimized (Auto)".into(),
+                        ..Default::default()
+                    },
+                ],
             }
             .into(),
             MenuItem::Separator,
