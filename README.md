@@ -2,6 +2,10 @@
 
 `nvsleepify` is a lightweight tool written in Rust designed for Linux users who want their Nvidia dGPU to stay off. It effectively "sleeps" (powers off) and "wakes" (powers on) the GPU on demand, which is useful to prevent programs randomly waking up the dGPU wasting battery life.
 
+### Note:
+
+If this tool doesn't function properly or you use a non-Nvidia GPU, I suggest you use [Cardwire](https://github.com/OpenGamingCollective/cardwire) and [cardwire-tray](https://github.com/JuanDelPueblo/cardwire-tray) instead. When configured properly these will do a better job than my own tool without excess jank.
+
 ## Features
 
 -   **Check Status**: Quickly see if your Nvidia GPU is Active (D0), Suspended, or Powered Off (D3cold).
